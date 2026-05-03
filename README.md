@@ -2,9 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Last commit](https://img.shields.io/github/last-commit/jnichor/Top_papers_creator)](https://github.com/jnichor/Top_papers_creator/commits/main)
 [![Stars](https://img.shields.io/github/stars/jnichor/Top_papers_creator?style=social)](https://github.com/jnichor/Top_papers_creator/stargazers)
-[![Issues](https://img.shields.io/github/issues/jnichor/Top_papers_creator)](https://github.com/jnichor/Top_papers_creator/issues)
 [![Powered by Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-D97757)](https://claude.ai/code)
 [![Runs on Antigravity](https://img.shields.io/badge/Runs%20on-Google%20Antigravity-4285F4)](https://antigravity.google/)
 
