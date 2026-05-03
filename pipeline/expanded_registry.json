@@ -1,0 +1,407 @@
+[
+  {
+    "title": "Replication data for: [Agricultural Transformation and Farmers' Expectations:  Experimental Evidence",
+    "dataverse_doi": "doi:10.7910/DVN/VYYD8W",
+    "journal": "REStat",
+    "design": "rct",
+    "area": "behavioral",
+    "design_tier": 1,
+    "score_ceiling": 93
+  },
+  {
+    "title": "Replication Data for: Allegations of Sexual Misconduct, Accused Scientists, and Their Research",
+    "dataverse_doi": "doi:10.7910/DVN/UVPPAK",
+    "journal": "REStat",
+    "design": "rct",
+    "area": "mixed",
+    "design_tier": 1,
+    "score_ceiling": 93
+  },
+  {
+    "title": "Replication Data for: \"The Curious Surge of Productivity in U.S. Restaurants\"",
+    "dataverse_doi": "doi:10.7910/DVN/HKIQ8F",
+    "journal": "REStat",
+    "design": "did",
+    "area": "mixed",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication data for: Long Story Short: Omitted Variable Bias in Causal Machine Learning",
+    "dataverse_doi": "doi:10.7910/DVN/VH6QHQ",
+    "journal": "REStat",
+    "design": "iv",
+    "area": "education",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "DRV, SOEP, SAVE",
+    "dataverse_doi": "doi:10.7910/DVN/5JGHDM",
+    "journal": "REStat",
+    "design": "did",
+    "area": "mixed",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication data for: \"Cluster Jackknife Instrumental Variables Estimation\"",
+    "dataverse_doi": "doi:10.7910/DVN/CLPGTP",
+    "journal": "REStat",
+    "design": "did",
+    "area": "mixed",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication Data for: 'Growth Experiences and Trust in Government'",
+    "dataverse_doi": "doi:10.7910/DVN/EYWTOW",
+    "journal": "QJE",
+    "design": "did",
+    "area": "public finance",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication Data for: 'Peer Effects and the Gender Gap in Corporate Leadership: Evidence from MBA St",
+    "dataverse_doi": "doi:10.7910/DVN/IDFWIC",
+    "journal": "QJE",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication data for: Public Scrutiny, Police Behavior, and Crime Consequences: Evidence from High-P",
+    "dataverse_doi": "doi:10.7910/DVN/DNE7IX",
+    "journal": "REStat",
+    "design": "rct",
+    "area": "public finance",
+    "design_tier": 1,
+    "score_ceiling": 93
+  },
+  {
+    "title": "Replication Data for: 'Monetary Policy and Sovereign Risk in Emerging Economies (NK-Default)'",
+    "dataverse_doi": "doi:10.7910/DVN/CMEFMV",
+    "journal": "QJE",
+    "design": "did",
+    "area": "mixed",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication Data for: The Economic Dynamics of City Structure: Evidence from Hiroshima's Recovery",
+    "dataverse_doi": "doi:10.7910/DVN/DHWPML",
+    "journal": "JPE",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication Data for: Glass Walls: Experimental Evidence on Constraints Faced by Women in Accessing ",
+    "dataverse_doi": "doi:10.7910/DVN/UICHET",
+    "journal": "JPE",
+    "design": "rct",
+    "area": "behavioral",
+    "design_tier": 1,
+    "score_ceiling": 93
+  },
+  {
+    "title": "Replication Package for: \"Ever Since Allais\"",
+    "dataverse_doi": "doi:10.7910/DVN/7BNXPD",
+    "journal": "JPE",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication Data for: Exchange Rates and Asset Prices in a Global Demand System",
+    "dataverse_doi": "doi:10.7910/DVN/9KNRFO",
+    "journal": "JPE",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication Data for: \"Efficiency and Redistribution in Environmental Policy: An Equilibrium Analysi",
+    "dataverse_doi": "doi:10.7910/DVN/RY2CVR",
+    "journal": "JPE",
+    "design": "did",
+    "area": "environment",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication Data for: Opening up Military Innovation: Causal Effects of Reforms to U.S. Defense Rese",
+    "dataverse_doi": "doi:10.7910/DVN/78W8M6",
+    "journal": "JPE",
+    "design": "did",
+    "area": "mixed",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication Data for: Toward an Understanding of the Returns to Cognitive Skill Across Cohorts",
+    "dataverse_doi": "doi:10.7910/DVN/ZH2JSN",
+    "journal": "JPE_Micro",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication Data for: Do Provinces that Win the Spanish Christmas Lottery Experience a Surge in Incu",
+    "dataverse_doi": "doi:10.7910/DVN/H8ALRW",
+    "journal": "JPE_Micro",
+    "design": "rct",
+    "area": "mixed",
+    "design_tier": 1,
+    "score_ceiling": 93
+  },
+  {
+    "title": "Replication Data for: Restaurant Employment, Minimum Wages, and Border Discontinuities",
+    "dataverse_doi": "doi:10.7910/DVN/GTOOOC",
+    "journal": "JPE_Micro",
+    "design": "did",
+    "area": "labor",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Humans versus Chatbots: Scaling-Up Behavioral Interventions to Reduce Teacher Shortages",
+    "dataverse_doi": "doi:10.7910/DVN/EGW86K",
+    "journal": "JPE_Micro",
+    "design": "rct",
+    "area": "education",
+    "design_tier": 1,
+    "score_ceiling": 93
+  },
+  {
+    "title": "Heterogeneous (Mis)Perceptions of Energy Costs: Implications for Measurement and Policy Design",
+    "dataverse_doi": "doi:10.7910/DVN/KIBJVQ",
+    "journal": "JPE_Micro",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication Data for: Why are Manufacturing Plants Smaller in Developing Countries? Theory and Evide",
+    "dataverse_doi": "doi:10.7910/DVN/QOFPJI",
+    "journal": "JPE_Macro",
+    "design": "rdd",
+    "area": "development",
+    "design_tier": 2,
+    "score_ceiling": 88
+  },
+  {
+    "title": "Replication Data for: Consumption Partial Insurance in the Presence of Tail Income Risk",
+    "dataverse_doi": "doi:10.7910/DVN/NPO6WG",
+    "journal": "JPE_Macro",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication data for: Temporal Aggregation Bias and Monetary Policy Transmission",
+    "dataverse_doi": "doi:10.7910/DVN/DQIG06",
+    "journal": "JPE_Macro",
+    "design": "did",
+    "area": "behavioral",
+    "design_tier": 2,
+    "score_ceiling": 87
+  },
+  {
+    "title": "Replication Data for: 'The Effects of Medical Debt Relief: Evidence from Two Randomized Experiments'",
+    "dataverse_doi": "doi:10.7910/DVN/WY6QQO",
+    "journal": "QJE",
+    "design": "iv",
+    "area": "health",
+    "design_tier": 3,
+    "score_ceiling": 80
+  },
+  {
+    "title": "Replication Data for: Job Training, English Language Skills, and Employability: Evidence from an Exp",
+    "dataverse_doi": "doi:10.7910/DVN/APVIVQ",
+    "journal": "EDCC",
+    "design": "iv",
+    "area": "labor",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 1260,
+    "_cols": 23,
+    "_missing_pct": 17.4
+  },
+  {
+    "title": "Replication Data for: Encouraging Digital Financial Technology Adoption during a Crisis: Experimenta",
+    "dataverse_doi": "doi:10.7910/DVN/ZDVUK8",
+    "journal": "EDCC",
+    "design": "rct",
+    "area": "behavioral",
+    "design_tier": 1,
+    "score_ceiling": 93,
+    "_rows": 15000,
+    "_cols": 33,
+    "_missing_pct": 15.2
+  },
+  {
+    "title": "Replication Data for Educational Effects of Sibling Deaths on Surviving Siblings",
+    "dataverse_doi": "doi:10.7910/DVN/SNBKV8",
+    "journal": "EDCC",
+    "design": "did",
+    "area": "education",
+    "design_tier": 2,
+    "score_ceiling": 87,
+    "_rows": 7944,
+    "_cols": 101,
+    "_missing_pct": 17.8
+  },
+  {
+    "title": "Replication Data for: \"When You Can't Afford to Wait for a Job\"",
+    "dataverse_doi": "doi:10.7910/DVN/MJCKFJ",
+    "journal": "EDCC",
+    "design": "iv",
+    "area": "labor",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 5619,
+    "_cols": 10,
+    "_missing_pct": 0.0
+  },
+  {
+    "title": "Replication Data for: Can Bridging the Learning Gap Improve Test Scores On A Key National Exam?  Evi",
+    "dataverse_doi": "doi:10.7910/DVN/EAFNR2",
+    "journal": "EDCC",
+    "design": "iv",
+    "area": "education",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 1283,
+    "_cols": 12,
+    "_missing_pct": 8.3
+  },
+  {
+    "title": "Replication Data for: Are we doing more harm than good? Using hypothetical bias reduction techniques",
+    "dataverse_doi": "doi:10.7910/DVN/S3C5VB",
+    "journal": "JAERE",
+    "design": "rct",
+    "area": "behavioral",
+    "design_tier": 1,
+    "score_ceiling": 93,
+    "_rows": 8173,
+    "_cols": 83,
+    "_missing_pct": 12.0
+  },
+  {
+    "title": "Replication Data for: Correcting Consumer Misperceptions About CO2 Emissions",
+    "dataverse_doi": "doi:10.7910/DVN/8RWS8G",
+    "journal": "JAERE",
+    "design": "iv",
+    "area": "environment",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 8176,
+    "_cols": 13,
+    "_missing_pct": 15.4
+  },
+  {
+    "title": "Replication Data and Code for \"Incentives and Information in Methane Leak Detection and Repair\"",
+    "dataverse_doi": "doi:10.7910/DVN/0LRYBP",
+    "journal": "JAERE",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 4473,
+    "_cols": 8,
+    "_missing_pct": 0.0
+  },
+  {
+    "title": "Replication Data for: Information scripts and the incentive compatibility of discrete choice experim",
+    "dataverse_doi": "doi:10.7910/DVN/WFBKG5",
+    "journal": "JAERE",
+    "design": "did",
+    "area": "mixed",
+    "design_tier": 2,
+    "score_ceiling": 87,
+    "_rows": 80000,
+    "_cols": 260,
+    "_missing_pct": 13.5
+  },
+  {
+    "title": "Replication Data for: Causal inference, high-frequency data, and the recreational value of water qua",
+    "dataverse_doi": "doi:10.7910/DVN/XMJZHI",
+    "journal": "JAERE",
+    "design": "iv",
+    "area": "environment",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 10163,
+    "_cols": 32,
+    "_missing_pct": 12.5
+  },
+  {
+    "title": "Replication Data for:  Impact of charging price subsidies on the charging behavior of heterogeneous ",
+    "dataverse_doi": "doi:10.7910/DVN/PTMMTJ",
+    "journal": "JAERE",
+    "design": "rct",
+    "area": "public finance",
+    "design_tier": 1,
+    "score_ceiling": 93,
+    "_rows": 6418,
+    "_cols": 29,
+    "_missing_pct": 0.0
+  },
+  {
+    "title": "Replication Package for Externalities of Policy-Induced Scrappage: The Case of Automotive Safety Ins",
+    "dataverse_doi": "doi:10.7910/DVN/AON5GR",
+    "journal": "JAERE",
+    "design": "iv",
+    "area": "mixed",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 120,
+    "_cols": 16,
+    "_missing_pct": 12.5
+  },
+  {
+    "title": "Replication Data for: Why Do Wages Grow Faster for Educated Workers?",
+    "dataverse_doi": "doi:10.7910/DVN/GDIUHK",
+    "journal": "JOLE",
+    "design": "iv",
+    "area": "labor",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 18880,
+    "_cols": 7,
+    "_missing_pct": 0.0
+  },
+  {
+    "title": "Replication Data for: Picture This: Social Distance and the Mistreatment of Migrant Workers",
+    "dataverse_doi": "doi:10.7910/DVN/STFGQB",
+    "journal": "JPE_Micro",
+    "design": "iv",
+    "area": "labor",
+    "design_tier": 3,
+    "score_ceiling": 80,
+    "_rows": 1990,
+    "_cols": 9,
+    "_missing_pct": 11.1
+  },
+  {
+    "title": "Replication Data for: The Dynamics of Informality and Fiscal Policy under Sovereign Risk",
+    "dataverse_doi": "doi:10.7910/DVN/LCSLHP",
+    "journal": "JPE_Macro",
+    "design": "did",
+    "area": "public finance",
+    "design_tier": 2,
+    "score_ceiling": 87,
+    "_rows": 462,
+    "_cols": 29,
+    "_missing_pct": 10.3
+  }
+]

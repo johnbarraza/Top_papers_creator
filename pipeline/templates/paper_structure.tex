@@ -1,0 +1,251 @@
+% ═══════════════════════════════════════════════════════════════════════════════
+% PAPER STRUCTURE TEMPLATE — Auto-filled by Stage 5
+%
+% This template defines the mandatory section order and content requirements.
+% Claude fills the {{PLACEHOLDER}} blocks with project-specific content.
+% The LaTeX preamble is loaded separately from example.tex.
+%
+% RULES:
+% 1. Do NOT reorder sections
+% 2. Do NOT delete sections (mark as N/A if not applicable)
+% 3. Every {{PLACEHOLDER}} must be replaced with actual content
+% 4. Numbers MUST come from the result CSVs, not invented
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\title{ {{PAPER_TITLE}} }
+\author{ {{AUTHOR_LINE}} }
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+{{ABSTRACT_CONTEXT}}
+% ONE sentence: what question, what method, what data.
+{{ABSTRACT_METHOD}}
+% ONE sentence: identification strategy and key assumption.
+{{ABSTRACT_RESULTS}}
+% 2-3 sentences: main coefficient, SE, significance, effect size.
+% MUST include: exact coefficient, p-value or CI, and Cohen's d or % change.
+{{ABSTRACT_IMPLICATIONS}}
+% ONE sentence: what this means for policy or theory.
+\end{abstract}
+
+\textbf{JEL Codes:} {{JEL_CODES}} \\
+\textbf{Keywords:} {{KEYWORDS}}
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:introduction}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+% Paragraph 1: The problem and why it matters (2-3 sentences)
+{{INTRO_MOTIVATION}}
+
+% Paragraph 2: What THIS paper does — contribution statement by page 2
+{{INTRO_CONTRIBUTION}}
+
+% Paragraph 3: Preview of identification strategy
+{{INTRO_IDENTIFICATION}}
+
+% Paragraph 4: Preview of main results (with exact numbers from CSVs)
+{{INTRO_RESULTS_PREVIEW}}
+
+% Paragraph 5: Why existing literature is insufficient (gap)
+{{INTRO_LITERATURE_GAP}}
+
+% Paragraph 6: Road map
+The remainder of the paper is organized as follows.
+Section~\ref{sec:literature} reviews related literature.
+Section~\ref{sec:data} describes the data and institutional context.
+Section~\ref{sec:strategy} presents the empirical strategy.
+Section~\ref{sec:results} reports the main results and robustness checks.
+Section~\ref{sec:conclusion} concludes.
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Literature Review}
+\label{sec:literature}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+% Subsection 1: Direct literature (papers on the same topic)
+\subsection{{{LIT_SUBSECTION_1_TITLE}}}
+{{LIT_SUBSECTION_1_CONTENT}}
+
+% Subsection 2: Methodological literature (papers using same identification)
+\subsection{{{LIT_SUBSECTION_2_TITLE}}}
+{{LIT_SUBSECTION_2_CONTENT}}
+
+% Subsection 3: This paper's positioning (how we differ from above)
+\subsection{Contribution to the Literature}
+{{LIT_CONTRIBUTION_POSITIONING}}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Data and Institutional Background}
+\label{sec:data}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Data Sources}
+% Describe each dataset: source, years, unit of observation, sample size
+{{DATA_SOURCES}}
+
+\subsection{Sample Construction}
+% CONSORT-style flow: total → filters → final sample
+% MUST include exact N at each step (from 00_clean.py output)
+{{SAMPLE_CONSTRUCTION}}
+
+\subsection{Descriptive Statistics}
+% Reference Table 1. Discuss key variables, means, SD.
+% Point out any notable features of the distribution.
+Table~\ref{tab:summary} presents summary statistics for the analysis sample.
+{{DESCRIPTIVE_STATS_DISCUSSION}}
+
+\subsection{Institutional Background}
+% Context needed to understand the identification strategy
+{{INSTITUTIONAL_BACKGROUND}}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Empirical Strategy}
+\label{sec:strategy}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Identification Strategy}
+% State the source of identifying variation
+% Name the design: RCT/DiD/IV/RDD
+{{IDENTIFICATION_STRATEGY}}
+
+\subsection{Estimation Equations}
+% Write the formal estimating equation(s)
+% Define every variable and subscript
+{{ESTIMATION_EQUATIONS}}
+
+\subsection{Identifying Assumptions}
+% List each assumption formally AND in plain language
+% For each: (a) formal statement, (b) intuition, (c) how we test it
+{{IDENTIFYING_ASSUMPTIONS}}
+
+\subsection{Threats to Identification}
+% Discuss the main threats and how each is addressed
+{{THREATS_TO_IDENTIFICATION}}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Main Results}
+% Reference main results table. Report coefficients, SEs, significance.
+% MUST include exact numbers from main_results.csv.
+% Report effect sizes: Cohen's d AND percentage change.
+{{MAIN_RESULTS}}
+
+\subsection{Robustness Checks}
+% Reference robustness table. Discuss each check and whether results hold.
+% MUST cover: alternative specifications, bandwidth/sample sensitivity,
+% placebo tests, and any design-specific checks.
+{{ROBUSTNESS_CHECKS}}
+
+\subsection{Heterogeneous Effects}
+% Reference heterogeneity table. Report subgroup results.
+% State whether interactions were pre-specified or exploratory.
+{{HETEROGENEOUS_EFFECTS}}
+
+% ── Design-specific subsections (include only if applicable) ──────────
+
+% For IV designs:
+% \subsection{First Stage and Instrument Validity}
+% {{FIRST_STAGE_DISCUSSION}}
+
+% For DiD designs:
+% \subsection{Pre-Trends and Event Study}
+% {{PRETRENDS_DISCUSSION}}
+
+% For RDD designs:
+% \subsection{Manipulation Tests and Local Validity}
+% {{MANIPULATION_TESTS}}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Interpretation of Results}
+% What do the magnitudes mean economically?
+% Compare to prior literature effect sizes.
+{{INTERPRETATION}}
+
+\subsection{Limitations}
+% Honest assessment of what the data and design CANNOT answer.
+% External validity concerns.
+{{LIMITATIONS}}
+
+\subsection{Policy Implications}
+% What should policymakers take from this? (if applicable)
+{{POLICY_IMPLICATIONS}}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+% ═══════════════════════════════════════════════════════════════════════════════
+
+% Paragraph 1: What we did and what we found (2 sentences, exact numbers)
+{{CONCLUSION_SUMMARY}}
+
+% Paragraph 2: Why it matters
+{{CONCLUSION_SIGNIFICANCE}}
+
+% Paragraph 3: Limitations and future work (2-3 sentences)
+{{CONCLUSION_FUTURE}}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% Tables (input from paper/tables/)
+% ═══════════════════════════════════════════════════════════════════════════════
+\clearpage
+{{TABLE_INPUTS}}
+% Example:
+% \input{tables/table_1_summary.tex}
+% \input{tables/table_2_main_results.tex}
+% etc.
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% Figures (input from paper/figures/)
+% ═══════════════════════════════════════════════════════════════════════════════
+\clearpage
+{{FIGURE_INPUTS}}
+% Example:
+% \begin{figure}[htbp]
+%   \centering
+%   \includegraphics[width=0.9\textwidth]{figures/figure_1.pdf}
+%   \caption{...}
+%   \label{fig:figure1}
+% \end{figure}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% Appendix (optional)
+% ═══════════════════════════════════════════════════════════════════════════════
+\appendix
+\section{Additional Results}
+\label{sec:appendix}
+{{APPENDIX_CONTENT}}
+
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% References
+% ═══════════════════════════════════════════════════════════════════════════════
+\clearpage
+\begin{thebibliography}{99}
+{{REFERENCES}}
+\end{thebibliography}
+
+\end{document}

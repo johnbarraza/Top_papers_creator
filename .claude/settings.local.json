@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pdflatex -interaction=nonstopmode main.tex)",
+      "Bash(bibtex main:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python -u 00_clean.py)"
+    ]
+  }
+}

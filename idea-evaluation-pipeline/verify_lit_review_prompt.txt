@@ -1,0 +1,39 @@
+You are a fact-checker verifying a literature review for a research idea evaluation.
+
+Review the literature review above and check for:
+
+1. **Citation Accuracy**: Are the cited papers real and correctly attributed? Flag any that seem fabricated or misattributed. For each citation:
+   - Does the author name match known researchers in this field?
+   - Is the journal plausible for this type of research?
+   - Does the described finding match what that paper actually found?
+
+2. **Completeness**: Are there obvious papers missing from the review? Think about:
+   - Seminal papers in this methodology (e.g., Angrist & Pischke for IV, Callaway & Sant'Anna for DiD)
+   - Recent high-profile papers in this specific topic area
+   - Papers that would challenge or contradict the proposed idea
+
+3. **Gap Assessment**: Is the claimed "gap" in the literature genuine?
+   - Could unpublished working papers already fill this gap?
+   - Is the gap a result of a genuine research opportunity or a data/method limitation?
+   - Would filling this gap be valuable to the field?
+
+4. **Risk Assessment**: Based on the literature, what is the risk that:
+   - The main effect is null (prior work suggests small/no effects)?
+   - The identification strategy has been critiqued in similar contexts?
+   - A competing paper is likely in progress?
+
+## Output
+
+Provide your verification with specific corrections and additions.
+
+End with:
+```json
+{
+  "citations_verified": true,
+  "suspicious_citations": [],
+  "missing_key_papers": ["..."],
+  "gap_confirmed": true,
+  "null_result_risk": "LOW|MEDIUM|HIGH",
+  "competition_risk": "LOW|MEDIUM|HIGH"
+}
+```

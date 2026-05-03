@@ -1,0 +1,419 @@
+"""
+Papers-HQ Pipeline Flowchart — 3-page professional diagram.
+HTML/CSS with inline arrow elements between cards. Chrome headless -> PDF.
+"""
+from pathlib import Path
+
+
+def generate_html():
+    return r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: A4 landscape; margin: 10mm 8mm 8mm 8mm; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: #334155; font-size: 7pt; line-height: 1.32; }
+
+.page { page-break-after: always; }
+.page:last-child { page-break-after: auto; }
+
+.hdr { text-align: center; margin-bottom: 3px; padding-bottom: 3px; border-bottom: 1.5px solid #E2E8F0; }
+.hdr h1 { font-size: 12.5pt; color: #1E293B; font-weight: 700; margin-bottom: 1px; }
+.hdr .sub { font-size: 6.5pt; color: #64748B; }
+
+.leg { display: flex; justify-content: center; gap: 10px; margin-bottom: 4px; font-size: 5.5pt; color: #64748B; }
+.leg .i { display: flex; align-items: center; gap: 2px; }
+.leg .d { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.leg .s { width: 9px; height: 6px; border-radius: 2px; display: inline-block; border: 0.5px solid; }
+
+/* ── Flow row: cards interleaved with arrows ── */
+.flow { display: flex; align-items: stretch; gap: 0; }
+.flow .card { flex: 1; min-width: 0; }
+
+/* Arrow connector between cards */
+.flow .arrow-conn { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 16px; width: 36px; flex-shrink: 0; }
+.flow .arrow-conn .shaft { width: 18px; height: 1.5px; background: #94A3B8; position: relative; }
+.flow .arrow-conn .shaft::after { content: ''; position: absolute; right: -4px; top: -3px; border-left: 5px solid #64748B; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; }
+.flow .arrow-conn .artifact { background: #FFFBEB; border: 0.6px solid #FCD34D; border-radius: 8px; padding: 1px 5px; font-size: 5pt; color: #92400E; font-weight: 500; margin-top: 3px; white-space: nowrap; text-align: center; }
+
+/* ── Cards ── */
+.card { border-radius: 6px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.06); border: 1px solid #E2E8F0; background: #fff; font-size: 6.5pt; display: flex; flex-direction: column; }
+.card-h { padding: 4px 6px; display: flex; align-items: center; gap: 4px; }
+.badge { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 7.5pt; flex-shrink: 0; }
+.card-t { font-size: 8.5pt; font-weight: 700; line-height: 1.1; }
+.card-st { font-size: 5pt; color: #94A3B8; }
+.card-b { padding: 3px 6px; border-top: 1px solid #F1F5F9; flex: 1; }
+.card-b .st { font-weight: 700; font-size: 6.5pt; margin-top: 2px; }
+.card-b .st:first-child { margin-top: 0; }
+.card-b ul { padding-left: 8px; margin: 0.5px 0; }
+.card-b li { margin: 0; }
+.card-b .w { color: #DC2626; font-weight: 600; font-size: 6pt; }
+.card-b .sp { height: 2px; }
+.card-b .n { font-size: 5pt; color: #94A3B8; }
+
+/* Choices */
+.ch { padding: 2px 6px; border-top: 1px dashed #E2E8F0; background: #FAFAFA; }
+.ch-l { font-weight: 700; font-size: 6pt; color: #475569; margin-bottom: 1px; }
+.p { display: inline-block; padding: 1px 5px; border-radius: 7px; font-size: 5.5pt; font-weight: 600; margin: 0.5px 0; }
+.p-ok { background: #DCFCE7; color: #166534; border: 0.5px solid #86EFAC; }
+.p-al { background: #FEF3C7; color: #92400E; border: 0.5px solid #FCD34D; }
+.p-no { background: #FEE2E2; color: #991B1B; border: 0.5px solid #FCA5A5; }
+
+/* I/O zone */
+.io { padding: 3px 6px; border-top: 1.5px solid; font-size: 6pt; }
+.io-l { font-weight: 700; font-size: 5.8pt; text-transform: uppercase; letter-spacing: 0.3px; }
+.io-l.out { color: #0F766E; }
+.io-l.in { color: #7C3AED; }
+.io-v { margin-left: 4px; color: #475569; }
+
+/* Tag */
+.tg-r { padding: 2px 6px; text-align: center; }
+.tg { display: inline-block; padding: 1px 8px; border-radius: 7px; font-size: 5pt; font-weight: 700; }
+.tg-a { background: #DCFCE7; color: #166534; border: 0.5px solid #86EFAC; }
+.tg-h { background: #FEE2E2; color: #991B1B; border: 0.5px solid #FCA5A5; }
+.tg-m { background: #FEF3C7; color: #92400E; border: 0.5px solid #FCD34D; }
+.tg-g { background: #FEF9C3; color: #A16207; border: 0.5px solid #FDE047; }
+.tg-n { background: #E0E7FF; color: #3730A3; border: 0.5px solid #A5B4FC; }
+.tg-p { background: #F3E8FF; color: #6B21A8; border: 0.5px solid #D8B4FE; }
+
+/* Color themes */
+.card.blue .card-h{background:#EFF6FF} .card.blue .badge{background:#1D4ED8} .card.blue .card-t{color:#1D4ED8} .card.blue .io{border-color:#93C5FD;background:#EFF6FF}
+.card.orange .card-h{background:#FFF7ED} .card.orange .badge{background:#C2410C} .card.orange .card-t{color:#C2410C} .card.orange .io{border-color:#FDBA74;background:#FFF7ED}
+.card.red .card-h{background:#FEF2F2} .card.red .badge{background:#B91C1C} .card.red .card-t{color:#B91C1C} .card.red .io{border-color:#FCA5A5;background:#FEF2F2}
+.card.green .card-h{background:#F0FDF4} .card.green .badge{background:#15803D} .card.green .card-t{color:#15803D} .card.green .io{border-color:#86EFAC;background:#F0FDF4}
+.card.purple .card-h{background:#FAF5FF} .card.purple .badge{background:#7E22CE} .card.purple .card-t{color:#7E22CE} .card.purple .io{border-color:#D8B4FE;background:#FAF5FF}
+.card.teal .card-h{background:#F0FDFA} .card.teal .badge{background:#0F766E} .card.teal .card-t{color:#0F766E} .card.teal .io{border-color:#5EEAD4;background:#F0FDFA}
+.card.amber .card-h{background:#FFFBEB} .card.amber .badge{background:#B45309} .card.amber .card-t{color:#B45309} .card.amber .io{border-color:#FCD34D;background:#FFFBEB}
+.card.indigo .card-h{background:#EEF2FF} .card.indigo .badge{background:#4338CA} .card.indigo .card-t{color:#4338CA} .card.indigo .io{border-color:#A5B4FC;background:#EEF2FF}
+
+/* Loop arrows (CSS-only) */
+.loop-row { display: flex; align-items: flex-start; margin-top: 3px; padding: 0 5%; }
+.loop-line { flex: 1; border-bottom: 1.5px dashed #DC2626; position: relative; height: 10px; }
+.loop-line::before { content: ''; position: absolute; left: 0; top: -3px; border-right: 5px solid #DC2626; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; }
+.loop-line .loop-label { position: absolute; left: 50%; top: 2px; transform: translateX(-50%); background: #FEF2F2; border: 0.6px solid #EF4444; border-radius: 8px; padding: 1px 7px; font-size: 5pt; font-weight: 600; color: #DC2626; white-space: nowrap; }
+.loop-up-l, .loop-up-r { width: 1.5px; height: 10px; border-left: 1.5px dashed #DC2626; }
+
+/* Output bubble */
+.out-node { display: flex; align-items: center; justify-content: center; width: 50px; flex-shrink: 0; }
+.out-bbl { background: #F0FDF4; border: 1.5px solid #22C55E; border-radius: 50%; width: 42px; height: 42px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 5pt; color: #166534; font-weight: 600; line-height: 1.15; }
+
+.nav-r { display: flex; justify-content: space-between; margin-top: 2px; }
+.nav-p { background: #1E293B; color: #fff; padding: 2px 8px; border-radius: 7px; font-size: 5.5pt; font-weight: 600; }
+.ftr { display: flex; justify-content: space-between; font-size: 4pt; color: #CBD5E1; margin-top: 1px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════ PAGE 1 ═══════ -->
+<div class="page">
+<div class="hdr"><h1>Papers-HQ + Clo-Author: Pipeline Flow</h1><div class="sub">Page 1 of 3 &mdash; Stages 1&ndash;3: Discovery, Ideation, Idea Selection, Validation</div></div>
+<div class="leg">
+  <div class="i"><span class="s" style="background:#94A3B8;border-color:#64748B;"></span><span style="font-size:7pt;margin-left:1px;">&#x2192;</span> Data flow</div>
+  <div class="i"><span style="display:inline-block;width:14px;border-top:1.5px dashed #DC2626;"></span> Loop</div>
+  <div class="i"><span class="s" style="background:#FFFBEB;border-color:#FCD34D;"></span> Artifact</div>
+  <div class="i"><span class="d" style="background:#B91C1C;"></span> Human</div>
+  <div class="i"><span class="s" style="background:#DCFCE7;border-color:#86EFAC;"></span> Automatic</div>
+  <div class="i"><span class="s" style="background:#FEF3C7;border-color:#FCD34D;"></span> Manual</div>
+</div>
+
+<div class="flow">
+  <!-- Stage 1 -->
+  <div class="card blue">
+    <div class="card-h"><div class="badge">1</div><div><div class="card-t">Discovery</div><div class="card-st">Path A or Path B</div></div></div>
+    <div class="card-b">
+      <div class="st">Path A: Repo Search (--topic)</div>
+      <ul><li>Search GitHub repos (&gt;50&#9733;)</li><li>Group &amp; rank by stars</li><li>Web: 3 seed papers</li></ul>
+      <div class="st">Path B: User Data (--data)</div>
+      <ul><li>Load &amp; inspect dataset</li><li>Early warning (low N)</li><li>Profile structure</li><li>Search 3 papers</li></ul>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage1_discovery.md &mdash; 3 seed papers + profile</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">--topic [+ --data]</div></div>
+    <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">3 seed<br>papers</div></div>
+
+  <!-- Stage 2 -->
+  <div class="card orange">
+    <div class="card-h"><div class="badge">2</div><div><div class="card-t">Ideation</div><div class="card-st">research-junshi/</div></div></div>
+    <div class="card-b">
+      <ul><li>Read seed papers</li><li>arXiv + journal search</li><li>Generate 8&ndash;10 ideas</li><li>Score: N&times;0.4+F&times;0.3+I&times;0.3</li><li>Top 3 (5+ sub-topics)</li></ul>
+      <div class="sp"></div>
+      <div class="st">If Path B:</div>
+      <ul><li>Constrain by data structure</li><li>ALLOWED vs FORBIDDEN</li></ul>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage2_ideation.md &mdash; top 3</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">3 seed papers (Stage 1)</div></div>
+    <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">Top 3<br>ideas</div></div>
+
+  <!-- Stage 2.5 -->
+  <div class="card red">
+    <div class="card-h"><div class="badge">2.5</div><div><div class="card-t">Idea Selection</div><div class="card-st">Human-in-the-Loop</div></div></div>
+    <div class="card-b">
+      <div class="st">Present top 3:</div>
+      <ul><li>Research question</li><li>Methodology</li><li>Score &amp; ranking</li><li>Data sources</li></ul>
+      <div class="n">State saved (Ctrl-C safe)</div>
+    </div>
+    <div class="ch">
+      <div class="ch-l">User decides:</div>
+      <span class="p p-ok">SELECT &lt;n&gt; &rarr; Stage 3</span><br>
+      <span class="p p-al">COMBINE &lt;n&gt;&lt;m&gt; &rarr; hybrid</span><br>
+      <span class="p p-no">REJECT ALL &rarr; Stage 2 &#8634;</span>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">selected_idea.md</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">Top 3 ideas (Stage 2)</div></div>
+    <div class="tg-r"><span class="tg tg-h">Human decision</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">selected<br>_idea.md</div></div>
+
+  <!-- Stage 3 -->
+  <div class="card green">
+    <div class="card-h"><div class="badge">3</div><div><div class="card-t">Validation</div><div class="card-st">idea-evaluation-pipeline/</div></div></div>
+    <div class="card-b">
+      <div class="st">8-step eval (4 calls):</div>
+      <ul><li>1+2. Evaluate + Critic</li><li>3+4. Pivot &lt;6 + Re-eval</li><li>5. Lit review (web)</li><li>6. Verify literature</li><li>7+8. Verdict + Critic</li></ul>
+      <div class="sp"></div>
+      <div class="w">&#8635; &lt;7 &rarr; retry Step 3 (max 5)</div>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage3_validation.md &mdash; score&ge;7</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">selected_idea.md</div></div>
+    <div class="tg-r"><span class="tg tg-a">Auto (retry loop)</span></div>
+  </div>
+</div>
+
+<!-- Loop: 2.5 REJECT -> 2 -->
+<div class="loop-row" style="padding: 0 12% 0 22%;">
+  <div class="loop-up-r"></div>
+  <div class="loop-line"><div class="loop-label">REJECT ALL &rarr; re-run Stage 2</div></div>
+  <div class="loop-up-l"></div>
+</div>
+
+<div class="nav-r"><span></span><span class="nav-p">Page 2 &rarr;</span></div>
+<div class="ftr"><span>Papers-HQ | run_pipeline.py</span><span>Page 1 of 3</span></div>
+</div>
+
+<!-- ═══════ PAGE 2 ═══════ -->
+<div class="page">
+<div class="hdr"><h1>Papers-HQ + Clo-Author: Pipeline Flow</h1><div class="sub">Page 2 of 3 &mdash; Stages 3.5&ndash;4.5: Strategy Review, Referee Preview, Code, Data Audit</div></div>
+<div class="leg">
+  <div class="i"><span class="s" style="background:#94A3B8;border-color:#64748B;"></span><span style="font-size:7pt;margin-left:1px;">&#x2192;</span> Data flow</div>
+  <div class="i"><span style="display:inline-block;width:14px;border-top:1.5px dashed #DC2626;"></span> Loop</div>
+  <div class="i"><span class="s" style="background:#FFFBEB;border-color:#FCD34D;"></span> Artifact</div>
+  <div class="i"><span class="d" style="background:#B91C1C;"></span> Human</div>
+  <div class="i"><span class="s" style="background:#DCFCE7;border-color:#86EFAC;"></span> Automatic</div>
+  <div class="i"><span class="s" style="background:#FEF3C7;border-color:#FCD34D;"></span> Manual</div>
+</div>
+
+<div class="flow">
+  <!-- 3.5 -->
+  <div class="card red">
+    <div class="card-h"><div class="badge">3.5</div><div><div class="card-t">Strategy Review</div><div class="card-st">Human-in-the-Loop</div></div></div>
+    <div class="card-b">
+      <div class="st">Phase 1: Data Sources</div>
+      <ul><li>Main only or +external?</li><li>Search, download, merge</li></ul>
+      <div class="st">Phase 2: Strategy Review</div>
+      <ul><li>Question &amp; method</li><li>Variables &amp; assumptions</li></ul>
+    </div>
+    <div class="ch">
+      <div class="ch-l">User decides:</div>
+      <span class="p p-ok">APPROVE &rarr; Stage 3.7</span><br>
+      <span class="p p-al">REFORMULATE &rarr; revised</span><br>
+      <span class="p p-no">REJECT &rarr; Stage 2.5 &#8634;</span>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">approved_strategy.md</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">stage3_validation.md</div></div>
+    <div class="tg-r"><span class="tg tg-h">Human decision</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">approved<br>_strategy</div></div>
+
+  <!-- 3.7 -->
+  <div class="card teal">
+    <div class="card-h"><div class="badge">3.7</div><div><div class="card-t">Referee Preview</div><div class="card-st">Automatic</div></div></div>
+    <div class="card-b">
+      <div style="margin-bottom:2px;">2 referees generate requirements:</div>
+      <div class="st">Domain Referee:</div>
+      <ul><li>Contribution &amp; lit gaps</li><li>Data needs, tables/figs</li></ul>
+      <div class="st">Methods Referee:</div>
+      <ul><li>Inference &amp; spec tests</li><li>Robustness &amp; pitfalls</li></ul>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">referee_checklist.md (MUST/SHOULD/NICE)</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">approved_strategy.md</div></div>
+    <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">referee<br>_checklist</div></div>
+
+  <!-- 4 -->
+  <div class="card amber">
+    <div class="card-h"><div class="badge">4</div><div><div class="card-t">Strategy &amp; Code</div><div class="card-st">Manual Intervention</div></div></div>
+    <div class="card-b">
+      <div class="st">Claude (conversation):</div>
+      <ul><li>Write strategy, pseudo_code, robustness</li><li>Scripts: 00_clean, 01_main, 02_robustness, 03_output</li><li>Execute all &amp; signal done</li></ul>
+      <div class="st">Pipeline validates:</div>
+      <ul><li>Scripts OK, clean_data.csv</li><li>Tables &amp; figures produced</li></ul>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">results_summary.md, scripts/, tables/, figures/</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">referee_checklist.md</div></div>
+    <div class="tg-r"><span class="tg tg-m">Manual intervention</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">clean<br>_data.csv</div></div>
+
+  <!-- 4.5 -->
+  <div class="card indigo">
+    <div class="card-h"><div class="badge">4.5</div><div><div class="card-t">Data Audit</div><div class="card-st">Quality gate</div></div></div>
+    <div class="card-b">
+      <div class="st">Sanity checks BEFORE paper:</div>
+      <ul><li><b>1.</b> Insurance dist. vs benchmarks</li><li><b>2.</b> Cell sizes (N&lt;30 flagged)</li><li><b>3.</b> Outcome &amp; QR degeneracy</li><li><b>4.</b> Survey weight extremes</li></ul>
+      <div class="sp"></div>
+      <div class="w">&bull; CRITICAL &rarr; warn user</div>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">data_audit.md (to referees Stg 6)</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">clean_data.csv</div></div>
+    <div class="tg-r"><span class="tg tg-n">Automatic (NEW)</span></div>
+  </div>
+</div>
+
+<!-- Loop: 3.5 REJECT -> 2.5 -->
+<div class="loop-row" style="padding: 0 70% 0 3%;">
+  <div class="loop-up-r"></div>
+  <div class="loop-line"><div class="loop-label">REJECT &rarr; Stage 2.5 (Page 1)</div></div>
+  <div class="loop-up-l"></div>
+</div>
+
+<div class="nav-r"><span class="nav-p">&larr; Page 1</span><span class="nav-p">Page 3 &rarr;</span></div>
+<div class="ftr"><span>Papers-HQ | run_pipeline.py</span><span>Page 2 of 3</span></div>
+</div>
+
+<!-- ═══════ PAGE 3 ═══════ -->
+<div class="page">
+<div class="hdr"><h1>Papers-HQ + Clo-Author: Pipeline Flow</h1><div class="sub">Page 3 of 3 &mdash; Stages 5&ndash;7: Writing, Peer Review, Submission</div></div>
+<div class="leg">
+  <div class="i"><span class="s" style="background:#94A3B8;border-color:#64748B;"></span><span style="font-size:7pt;margin-left:1px;">&#x2192;</span> Data flow</div>
+  <div class="i"><span style="display:inline-block;width:14px;border-top:1.5px dashed #DC2626;"></span> Loop</div>
+  <div class="i"><span class="s" style="background:#FFFBEB;border-color:#FCD34D;"></span> Artifact</div>
+  <div class="i"><span class="d" style="background:#B91C1C;"></span> Human</div>
+  <div class="i"><span class="s" style="background:#DCFCE7;border-color:#86EFAC;"></span> Automatic</div>
+  <div class="i"><span class="s" style="background:#FEF3C7;border-color:#FCD34D;"></span> Manual</div>
+</div>
+
+<div class="flow">
+  <!-- 5 -->
+  <div class="card amber">
+    <div class="card-h"><div class="badge">5</div><div><div class="card-t">Writing</div><div class="card-st">Manual Intervention</div></div></div>
+    <div class="card-b">
+      <div class="st">Claude writes:</div>
+      <ul><li>abstract, intro, literature, data</li><li>strategy, results, robustness</li><li>conclusion, main.tex, refs.bib</li></ul>
+      <div class="st">Pipeline compiles:</div>
+      <ul><li>pdflatex&times;3 + bibtex &rarr; PDF</li><li>Fallback: fpdf2</li></ul>
+      <div class="sp"></div>
+      <div class="w">&#8635; R&amp;R: rewrite from referee feedback</div>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">paper/main.pdf, sections/*.tex</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">results_summary, tables/, figures/</div></div>
+    <div class="tg-r"><span class="tg tg-m">Manual intervention</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">main.tex<br>(compiled)</div></div>
+
+  <!-- 6 -->
+  <div class="card purple">
+    <div class="card-h"><div class="badge">6</div><div><div class="card-t">Peer Review</div><div class="card-st">editor + 2 referees</div></div></div>
+    <div class="card-b">
+      <div class="st">6a. Editor Desk Review</div>
+      <ul><li>PROCEED or DESK_REJECT</li></ul>
+      <div class="st">6b. Referees (parallel)</div>
+      <ul><li>Domain + Methods referee</li></ul>
+      <div style="margin:1px 0;padding:1.5px 3px;background:#FAF5FF;border-radius:3px;border:0.5px solid #E9D5FF;font-size:5.5pt;">
+        <b>Evidence:</b> data_audit, results, cell_sizes, tables<br>
+        <b>Calibration:</b> standard practices OK
+      </div>
+      <div class="st">6c. Deterministic Decision</div>
+      <ul style="font-size:5.8pt;"><li>&ge;75 no fatal &rarr; ACCEPT</li><li>60-74 &rarr; MINOR/MAJOR</li><li>&lt;60 &rarr; MAJOR_REV (R&amp;R)</li><li>&lt;40+fatal &rarr; REJECT</li></ul>
+    </div>
+    <div class="ch">
+      <div class="ch-l">After R&amp;R, user chooses:</div>
+      <span class="p p-ok">[1] Accept &rarr; Stage 7</span><br>
+      <span class="p p-al">[2] Manual fix &rarr; re-review</span><br>
+      <span class="p p-no">[3] Restart from Stage 3.7 &#8634;</span>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">2 reports + editorial decision</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">paper/main.tex (PDF)</div></div>
+    <div class="tg-r"><span class="tg tg-p">Auto + evidence + user choice</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">Accepted<br>paper</div></div>
+
+  <!-- 7 -->
+  <div class="card blue">
+    <div class="card-h"><div class="badge">7</div><div><div class="card-t">Submission</div><div class="card-st">orchestrator + verifier</div></div></div>
+    <div class="card-b">
+      <div class="st">7a. Replication Audit</div>
+      <ul><li>Re-run scripts, compare hashes</li></ul>
+      <div class="st">7b. Integration Validation</div>
+      <ul><li>Strategy&rarr;Code&rarr;Paper checks</li></ul>
+      <div class="st">7c. Quality Gate</div>
+      <ul><li>Aggregate &ge;70, each &ge;60</li><li style="font-size:5pt;color:#64748B;">ID 30% Code 20% Paper 25% Polish 15% Repl 10%</li></ul>
+      <div class="st">7d. Journal Targeting</div>
+      <ul><li>30 profiles, AEA repl pkg</li></ul>
+      <div class="sp"></div>
+      <div style="font-weight:600;">User: Accept or Improve (max 3)</div>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">main.pdf, replication/ (AEA)</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">accepted paper + artifacts</div></div>
+    <div class="tg-r"><span class="tg tg-g">Final gate &ge; 70</span></div>
+  </div>
+
+  <!-- Arrow to output -->
+  <div class="arrow-conn"><div class="shaft"></div></div>
+  <div class="out-node"><div class="out-bbl">Academic<br>Paper<br>(PDF)</div></div>
+</div>
+
+<!-- Loop: R&R Stage 6 -> 5 -->
+<div class="loop-row" style="padding: 0 50% 0 8%;">
+  <div class="loop-up-r"></div>
+  <div class="loop-line"><div class="loop-label">MAJOR_REVISIONS &rarr; R&amp;R loop (max 3 rounds)</div></div>
+  <div class="loop-up-l"></div>
+</div>
+
+<!-- Loop: Restart 6 -> 3.7 -->
+<div class="loop-row" style="padding: 0 50% 0 3%;">
+  <div class="loop-up-r"></div>
+  <div class="loop-line"><div class="loop-label">User [3]: Restart from Stage 3.7 (Page 2) &mdash; rebuild code + paper</div></div>
+  <div class="loop-up-l"></div>
+</div>
+
+<div class="nav-r"><span class="nav-p">&larr; Page 2</span><span></span></div>
+<div class="ftr"><span>Papers-HQ | run_pipeline.py</span><span>Page 3 of 3</span></div>
+</div>
+
+</body></html>"""
+
+
+def main():
+    import subprocess, shutil
+
+    base = Path(__file__).parent
+    out = base / "pipeline_flowchart.pdf"
+    html_path = base / "pipeline_flowchart.html"
+    html_path.write_text(generate_html(), encoding="utf-8")
+    print(f"HTML saved: {html_path}")
+
+    chrome_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        shutil.which("chrome") or "", shutil.which("google-chrome") or "",
+    ]
+    chrome = next((p for p in chrome_paths if p and Path(p).exists()), None)
+
+    if chrome:
+        cmd = [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+               "--run-all-compositor-stages-before-draw",
+               f"--print-to-pdf={out.resolve()}",
+               "--print-to-pdf-no-header",
+               "--no-pdf-header-footer",
+               html_path.resolve().as_uri()]
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if out.exists() and out.stat().st_size > 1000:
+            print(f"PDF saved: {out} ({out.stat().st_size//1024} KB)")
+            return
+    print(f"Open {html_path} in browser and print to PDF.")
+
+
+if __name__ == "__main__":
+    main()

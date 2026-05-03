@@ -1,0 +1,3550 @@
+"""Stage 1 - Discovery.
+
+Path A (--topic only):  Multi-agent dataset search (web + APIs + GitHub).
+                        Consolidator evaluates and ranks by causal potential.
+Path B (--data given):  Profile user dataset, early warning, recommend methods.
+"""
+
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import functools
+print = functools.partial(print, flush=True)  # type: ignore[assignment]
+
+from ..config import get_profile
+from ..claude_runner import run_claude
+from ..json_utils import extract_json
+from ..state import save_state
+
+
+# ── Path A: API-based dataset searchers ───────────────────────────────────────
+
+def _search_dataverse(topic: str, max_results: int = 5) -> list[dict]:
+    """Search Harvard Dataverse for datasets related to the topic."""
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [dataverse] Searching for '{topic}'...")
+    try:
+        r = requests.get(
+            "https://dataverse.harvard.edu/api/search",
+            params={
+                "q": topic,
+                "type": "dataset",
+                "per_page": max_results,
+                "sort": "date",
+                "order": "desc",
+                "fq": 'subject_ss:"Social Sciences"',
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        items = r.json().get("data", {}).get("items", [])
+        results = []
+        for item in items:
+            results.append({
+                "name": item.get("name", ""),
+                "provider": "Harvard Dataverse",
+                "url": item.get("url", ""),
+                "description": (item.get("description", "") or "")[:300],
+                "published": item.get("published_at", "")[:10],
+                "source_api": "dataverse",
+            })
+        print(f"  [dataverse] Found {len(results)} datasets")
+        return results
+    except Exception as e:
+        print(f"  [dataverse] Error: {e}")
+        return []
+
+
+def _search_zenodo(topic: str, max_results: int = 5) -> list[dict]:
+    """Search Zenodo for datasets related to the topic."""
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [zenodo] Searching for '{topic}'...")
+    try:
+        r = requests.get(
+            "https://zenodo.org/api/records",
+            params={
+                "q": f"{topic} econometrics OR panel OR causal",
+                "type": "dataset",
+                "size": max_results,
+                "sort": "mostrecent",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        hits = r.json().get("hits", {}).get("hits", [])
+        results = []
+        for item in hits:
+            meta = item.get("metadata", {})
+            files = [f.get("key", "") for f in item.get("files", [])[:5]]
+            results.append({
+                "name": meta.get("title", ""),
+                "provider": "Zenodo",
+                "url": f"https://zenodo.org/records/{item.get('id', '')}",
+                "doi": meta.get("doi", ""),
+                "description": (meta.get("description", "") or "")[:300],
+                "files": files,
+                "published": meta.get("publication_date", ""),
+                "source_api": "zenodo",
+            })
+        print(f"  [zenodo] Found {len(results)} datasets")
+        return results
+    except Exception as e:
+        print(f"  [zenodo] Error: {e}")
+        return []
+
+
+def _search_github(topic: str, max_results: int = 5) -> list[dict]:
+    """Search GitHub for replication packages related to the topic."""
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [github] Searching for '{topic}'...")
+    try:
+        # Build queries in English for better GitHub coverage
+        # Extract key English terms from topic
+        _translations = {
+            "educación": "education", "salud": "health", "empleo": "employment",
+            "trabajo": "labor", "pobreza": "poverty", "comercio": "trade",
+            "migración": "migration", "desigualdad": "inequality",
+            "agricultura": "agriculture", "clima": "climate",
+            "vivienda": "housing", "criminalidad": "crime",
+            "género": "gender", "desarrollo": "development",
+        }
+        topic_en = topic.lower()
+        for es, en in _translations.items():
+            topic_en = topic_en.replace(es, en)
+
+        queries = [
+            f"{topic_en} replication data",
+            f"{topic_en} dataset causal",
+            f"{topic} replication",
+        ]
+        seen_repos = set()
+        results = []
+
+        for q in queries:
+            if len(results) >= max_results:
+                break
+            r = requests.get(
+                "https://api.github.com/search/repositories",
+                params={"q": q, "sort": "stars", "per_page": max_results},
+                timeout=20,
+            )
+            r.raise_for_status()
+            for item in r.json().get("items", []):
+                repo_name = item.get("full_name", "")
+                if repo_name in seen_repos:
+                    continue
+                seen_repos.add(repo_name)
+                results.append({
+                    "name": repo_name,
+                    "provider": "GitHub",
+                    "url": item.get("html_url", ""),
+                    "description": (item.get("description", "") or "")[:300],
+                    "stars": item.get("stargazers_count", 0),
+                    "language": item.get("language", ""),
+                    "updated": (item.get("updated_at", "") or "")[:10],
+                    "source_api": "github",
+                })
+
+        print(f"  [github] Found {len(results)} repos")
+        return results
+    except Exception as e:
+        print(f"  [github] Error: {e}")
+        return []
+
+
+def _search_dbnomics(topic: str, max_results: int = 5) -> list[dict]:
+    """Search DBnomics meta-aggregator (covers FRED, IMF, ECB, OECD, BIS, Eurostat, WB).
+
+    DBnomics indexes ~750M economic time series from ~93 official providers.
+    Free, no API key required.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [dbnomics] Searching for '{topic}'...")
+    try:
+        r = requests.get(
+            "https://api.db.nomics.world/v22/search",
+            params={"q": topic, "limit": max_results},
+            timeout=20,
+        )
+        r.raise_for_status()
+        docs = r.json().get("results", {}).get("docs", [])
+        results = []
+        for d in docs:
+            provider = d.get("provider_name", d.get("provider_code", ""))
+            dataset_code = d.get("code", "")
+            results.append({
+                "name": d.get("name", "")[:200],
+                "provider": f"DBnomics ({provider})",
+                "url": f"https://db.nomics.world/{d.get('provider_code', '')}/{dataset_code}",
+                "description": (d.get("description", "") or "")[:300],
+                "n_series": d.get("nb_series", 0),
+                "source_api": "dbnomics",
+            })
+        print(f"  [dbnomics] Found {len(results)} datasets")
+        return results
+    except Exception as e:
+        print(f"  [dbnomics] Error: {e}")
+        return []
+
+
+def _search_ckan(api_root: str, portal_label: str, topic: str,
+                 max_results: int = 5,
+                 use_format_filter: bool = True,
+                 source_api: str | None = None,
+                 dataset_url_template: str | None = None) -> list[dict]:
+    """Generic CKAN package_search adapter.
+
+    Most national open-data portals (data.gov, data.gov.uk, IDB, data.gov.au,
+    open.canada.ca, datos.gob.mx, govdata.de, dati.gov.it, ...) expose the same
+    CKAN action API at `/api/3/action/package_search`. This single helper
+    handles all of them with one consistent extraction of `download_url`.
+
+    Args:
+        api_root: base URL of the CKAN install (without trailing slash)
+                  — the helper appends /api/3/action/package_search
+        portal_label: human-readable name shown in logs and `provider`
+        topic: free-text search query
+        max_results: rows to request
+        use_format_filter: if True, restricts results to those with at least
+                           one CSV/TSV/JSON/XLSX/ZIP resource (faster + higher
+                           yield for Path C). Some portals don't support this
+                           facet — set False to disable.
+        source_api: short identifier stored in candidate dicts (defaults to
+                    a slugified portal_label).
+        dataset_url_template: optional Python format string for landing-page
+                              URLs (gets `{name}` substituted from CKAN
+                              package name). Defaults to `{api_root}/dataset/{name}`.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    label = portal_label
+    src = source_api or label.replace(".", "_").replace(" ", "_").lower()
+    print(f"  [{label}] Searching for '{topic}'...")
+
+    _DL_EXTS = (".csv", ".tsv", ".tab", ".dta", ".parquet", ".xlsx", ".zip", ".json")
+    _DL_FMTS = {"csv", "tsv", "dta", "parquet", "xlsx", "zip", "json"}
+
+    params: dict = {"q": topic, "rows": max_results}
+    if use_format_filter:
+        params["fq"] = "res_format:(CSV OR TSV OR JSON OR XLSX OR ZIP)"
+
+    try:
+        r = requests.get(
+            f"{api_root.rstrip('/')}/api/3/action/package_search",
+            params=params,
+            timeout=20,
+        )
+        r.raise_for_status()
+        items = r.json().get("result", {}).get("results", [])
+        results = []
+
+        def _flatten(value):
+            """Some CKAN installs return multilingual title/notes as dicts."""
+            if isinstance(value, dict):
+                return value.get("en") or value.get("es") or value.get("it") \
+                    or next(iter(value.values()), "") or ""
+            return value or ""
+
+        for item in items:
+            org = item.get("organization") or {}
+            if isinstance(org, dict):
+                org_name = _flatten(org.get("title")) or org.get("name") or label
+            else:
+                org_name = label
+
+            download_url = ""
+            download_format = ""
+            for res in (item.get("resources") or []):
+                fmt = (_flatten(res.get("format")) or "").lower()
+                ru = _flatten(res.get("url"))
+                if (ru and (ru.lower().endswith(_DL_EXTS) or fmt in _DL_FMTS)):
+                    download_url = ru
+                    download_format = fmt or Path(ru).suffix.lstrip(".")
+                    break
+
+            name_slug = item.get("name", "")
+            if dataset_url_template:
+                landing = dataset_url_template.format(name=name_slug, api_root=api_root)
+            else:
+                landing = f"{api_root.rstrip('/')}/dataset/{name_slug}"
+
+            results.append({
+                "name": _flatten(item.get("title"))[:200],
+                "provider": f"{label} ({org_name})" if org_name and org_name != label else label,
+                "url": landing,
+                "download_url": download_url,
+                "download_format": download_format,
+                "description": _flatten(item.get("notes"))[:300],
+                "published": (item.get("metadata_created") or "")[:10],
+                "source_api": src,
+            })
+        n_dl = sum(1 for r in results if r["download_url"])
+        print(f"  [{label}] Found {len(results)} datasets ({n_dl} directly downloadable)")
+        return results
+    except Exception as e:
+        print(f"  [{label}] Error: {e}")
+        return []
+
+
+def _search_datagov(topic: str, max_results: int = 5) -> list[dict]:
+    """Search US data.gov (CKAN) for datasets with directly-downloadable files.
+
+    Uses CKAN's `res_format` facet filter (via _search_ckan helper) to require
+    at least one resource in a parseable format. This is far more reliable
+    than filtering by organization, because data.gov indexes many federal/
+    state/municipal portals where most "datasets" are actually HTML landing
+    pages. Downstream Q1-Q8 quality filters reject low-quality files so this
+    function does NOT need to gate on causal structure.
+    """
+    return _search_ckan(
+        api_root="https://catalog.data.gov",
+        portal_label="data.gov",
+        topic=topic,
+        max_results=max_results,
+        source_api="datagov",
+    )
+
+
+def _search_worldbank(topic: str, max_results: int = 5) -> list[dict]:
+    """Search World Bank Indicators API for indicators matching topic keywords.
+
+    The WB Indicators API has no full-text search, so we fetch the indicator
+    catalog and filter by topic keywords client-side. Returns indicator metadata
+    pointing at the country-year panel data accessible via the same API.
+    Free, no API key required.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [worldbank] Searching for '{topic}'...")
+    try:
+        # WB indicator search: fetch a page of indicators and filter by topic terms
+        r = requests.get(
+            "https://api.worldbank.org/v2/indicator",
+            params={"format": "json", "per_page": 500, "page": 1},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list) or len(data) < 2:
+            return []
+        indicators = data[1] or []
+
+        terms = [t.lower() for t in topic.split() if len(t) > 3]
+        scored = []
+        for ind in indicators:
+            name = (ind.get("name") or "").lower()
+            note = (ind.get("sourceNote") or "").lower()
+            score = sum(1 for t in terms if t in name or t in note)
+            if score > 0:
+                scored.append((score, ind))
+        scored.sort(key=lambda x: -x[0])
+
+        results = []
+        for _, ind in scored[:max_results]:
+            code = ind.get("id", "")
+            results.append({
+                "name": ind.get("name", "")[:200],
+                "provider": f"World Bank ({(ind.get('source') or {}).get('value', 'WDI')})",
+                "url": f"https://data.worldbank.org/indicator/{code}",
+                "description": (ind.get("sourceNote", "") or "")[:300],
+                "indicator_code": code,
+                "source_api": "worldbank",
+            })
+        print(f"  [worldbank] Found {len(results)} indicators")
+        return results
+    except Exception as e:
+        print(f"  [worldbank] Error: {e}")
+        return []
+
+
+def _search_idb(topic: str, max_results: int = 5) -> list[dict]:
+    """Search IDB (Inter-American Development Bank) Numbers for Development.
+
+    LatAm-focused open data: impact evaluations, household surveys, and
+    country indicators. Uses CKAN but does NOT support the res_format facet
+    filter, so we disable it here. Multilingual title/notes are handled by
+    the helper's `_flatten` adapter.
+    """
+    return _search_ckan(
+        api_root="https://data.iadb.org",
+        portal_label="IDB Numbers for Development",
+        topic=topic,
+        max_results=max_results,
+        use_format_filter=False,
+        source_api="idb",
+    )
+
+
+def _search_eu_opendata(topic: str, max_results: int = 5) -> list[dict]:
+    """Search EU Open Data Portal (data.europa.eu) — pan-European catalog.
+
+    Aggregates Eurostat + national portals across all EU member states. Uses
+    the EDP search API (NOT plain CKAN) which returns DCAT distributions
+    rather than CKAN resources, so the schema adapter is different from
+    data.gov / IDB.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [eu_opendata] Searching for '{topic}'...")
+    _DL_FORMATS = {"CSV", "TSV", "JSON", "XLSX", "XLS", "ZIP", "TAB"}
+    _DL_EXTS = (".csv", ".tsv", ".tab", ".dta", ".parquet", ".xlsx", ".zip", ".json")
+    try:
+        r = requests.get(
+            "https://data.europa.eu/api/hub/search/search",
+            params={"q": topic, "limit": max_results},
+            timeout=20,
+        )
+        r.raise_for_status()
+        items = r.json().get("result", {}).get("results", [])
+        results = []
+        for item in items:
+            # EDP returns title/description as multilingual dicts keyed by lang
+            def _i18n(v):
+                if isinstance(v, dict):
+                    return v.get("en") or next(iter(v.values()), "") or ""
+                return v or ""
+
+            title = _i18n(item.get("title", ""))
+            desc = _i18n(item.get("description", ""))
+
+            # Walk distributions for the first downloadable file. EU EDP often
+            # mislabels formats (e.g. format=HTML for what is actually a CSV
+            # endpoint), so we accept either a known download format OR a URL
+            # whose extension matches a parseable format.
+            download_url = ""
+            download_format = ""
+            for dist in (item.get("distributions") or []):
+                fmt_obj = dist.get("format") or {}
+                fmt_id = (fmt_obj.get("id") or "").upper() if isinstance(fmt_obj, dict) else ""
+
+                # Collect candidate URLs from both download_url and access_url
+                # (each can be list, string, or missing). Skip empty strings.
+                cand_urls = []
+                for key in ("download_url", "access_url"):
+                    val = dist.get(key)
+                    if isinstance(val, list):
+                        cand_urls.extend(u for u in val if u)
+                    elif isinstance(val, str) and val:
+                        cand_urls.append(val)
+
+                for cand_url in cand_urls:
+                    if fmt_id in _DL_FORMATS or cand_url.lower().endswith(_DL_EXTS):
+                        download_url = cand_url
+                        download_format = fmt_id.lower() or Path(cand_url).suffix.lstrip(".").lower()
+                        break
+                if download_url:
+                    break
+
+            country = (item.get("country") or {}).get("label", "EU")
+            results.append({
+                "name": title[:200],
+                "provider": f"EU Open Data ({country})",
+                "url": (item.get("resource") or "").strip(),
+                "download_url": download_url,
+                "download_format": download_format,
+                "description": desc[:300],
+                "source_api": "eu_opendata",
+            })
+        print(f"  [eu_opendata] Found {len(results)} datasets "
+              f"({sum(1 for r in results if r['download_url'])} directly downloadable)")
+        return results
+    except Exception as e:
+        print(f"  [eu_opendata] Error: {e}")
+        return []
+
+
+def _search_data_gov_uk(topic: str, max_results: int = 5) -> list[dict]:
+    """Search UK government open data portal (data.gov.uk) — CKAN."""
+    return _search_ckan(
+        api_root="https://data.gov.uk",
+        portal_label="data.gov.uk",
+        topic=topic,
+        max_results=max_results,
+        source_api="data_gov_uk",
+    )
+
+
+# ── Additional national CKAN portals (added 2026-04-10) ───────────────────────
+# All 5 use the same generic _search_ckan helper. Adding more portals in the
+# future requires only one new wrapper function (not a new schema adapter).
+
+def _search_data_gov_au(topic: str, max_results: int = 5) -> list[dict]:
+    """Australia federal open data portal (data.gov.au) — CKAN."""
+    return _search_ckan(
+        api_root="https://data.gov.au/data",
+        portal_label="data.gov.au",
+        topic=topic,
+        max_results=max_results,
+        source_api="data_gov_au",
+        dataset_url_template="https://data.gov.au/data/dataset/{name}",
+    )
+
+
+def _search_open_canada(topic: str, max_results: int = 5) -> list[dict]:
+    """Canada federal open data portal (open.canada.ca) — CKAN."""
+    return _search_ckan(
+        api_root="https://open.canada.ca/data",
+        portal_label="open.canada.ca",
+        topic=topic,
+        max_results=max_results,
+        source_api="open_canada",
+        dataset_url_template="https://open.canada.ca/data/en/dataset/{name}",
+    )
+
+
+def _search_datos_gob_mx(topic: str, max_results: int = 5) -> list[dict]:
+    """México federal open data portal (datos.gob.mx) — CKAN.
+
+    Spanish-language portal — for best results pass Spanish keywords.
+    Format facet filter is disabled because the install behaves erratically
+    when it's enabled; the post-walk filter still extracts download_url.
+    """
+    return _search_ckan(
+        api_root="https://datos.gob.mx",
+        portal_label="datos.gob.mx",
+        topic=topic,
+        max_results=max_results,
+        use_format_filter=False,
+        source_api="datos_gob_mx",
+        dataset_url_template="https://datos.gob.mx/busca/dataset/{name}",
+    )
+
+
+def _search_govdata_de(topic: str, max_results: int = 5) -> list[dict]:
+    """Germany federal open data portal (govdata.de) — CKAN.
+
+    German-language portal — for best results pass German keywords.
+    """
+    return _search_ckan(
+        api_root="https://ckan.govdata.de",
+        portal_label="govdata.de",
+        topic=topic,
+        max_results=max_results,
+        source_api="govdata_de",
+        dataset_url_template="https://www.govdata.de/web/guest/suchen/-/details/{name}",
+    )
+
+
+def _search_dati_gov_it(topic: str, max_results: int = 5) -> list[dict]:
+    """Italy federal open data portal (dati.gov.it) — CKAN.
+
+    Italian-language portal — for best results pass Italian keywords.
+    Format facet filter is disabled because the install does not support it
+    reliably; we still walk resources to extract download_url.
+    """
+    return _search_ckan(
+        api_root="https://www.dati.gov.it/opendata",
+        portal_label="dati.gov.it",
+        topic=topic,
+        max_results=max_results,
+        use_format_filter=False,
+        source_api="dati_gov_it",
+        dataset_url_template="https://www.dati.gov.it/view-dataset/dataset?id={name}",
+    )
+
+
+# ── Non-CKAN sources (Phase 2: Socrata + FAOSTAT) ─────────────────────────────
+
+def _search_socrata(topic: str, max_results: int = 5) -> list[dict]:
+    """Search the Socrata federated catalog (api.us.socrata.com).
+
+    A SINGLE searcher covers ~30 US city/state Socrata installs (NYC Open
+    Data, Chicago, San Francisco, LA, Seattle, Austin, California, Texas,
+    Missouri, ...). For each result we construct the canonical CSV download
+    URL via the standard Socrata pattern:
+        https://{domain}/api/views/{id}/rows.csv?accessType=DOWNLOAD
+    Free, no API key, generous rate limits.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [socrata] Searching for '{topic}'...")
+    try:
+        r = requests.get(
+            "https://api.us.socrata.com/api/catalog/v1",
+            params={"q": topic, "only": "dataset", "limit": max_results},
+            timeout=20,
+        )
+        r.raise_for_status()
+        items = r.json().get("results") or []
+        results = []
+        for it in items:
+            res = it.get("resource") or {}
+            md = it.get("metadata") or {}
+            dataset_id = res.get("id") or ""
+            domain = md.get("domain") or ""
+            if not dataset_id or not domain:
+                continue
+            # Standard Socrata CSV export endpoint — works on every install
+            download_url = f"https://{domain}/api/views/{dataset_id}/rows.csv?accessType=DOWNLOAD"
+            results.append({
+                "name": (res.get("name") or "")[:200],
+                "provider": f"Socrata ({domain})",
+                "url": it.get("permalink", "") or it.get("link", ""),
+                "download_url": download_url,
+                "download_format": "csv",
+                "description": (res.get("description") or "")[:300],
+                "published": (res.get("createdAt") or "")[:10],
+                "source_api": "socrata",
+            })
+        n_dl = sum(1 for x in results if x["download_url"])
+        print(f"  [socrata] Found {len(results)} datasets ({n_dl} directly downloadable)")
+        return results
+    except Exception as e:
+        print(f"  [socrata] Error: {e}")
+        return []
+
+
+# ── FAOSTAT bulk catalog cache ────────────────────────────────────────────────
+# The full catalog is small (~68 entries, ~30KB JSON) and rarely changes, so
+# we fetch it once per process and filter client-side.
+_FAOSTAT_CATALOG_CACHE: list[dict] = []
+
+
+def _faostat_catalog() -> list[dict]:
+    """Lazy-load the FAOSTAT bulk dataset catalog (cached in-process)."""
+    global _FAOSTAT_CATALOG_CACHE
+    if _FAOSTAT_CATALOG_CACHE:
+        return _FAOSTAT_CATALOG_CACHE
+    try:
+        import requests
+        r = requests.get(
+            "https://bulks-faostat.fao.org/production/datasets_E.json",
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        _FAOSTAT_CATALOG_CACHE = data.get("Datasets", {}).get("Dataset", []) or []
+    except Exception as e:
+        print(f"  [faostat] Catalog fetch failed: {e}")
+        _FAOSTAT_CATALOG_CACHE = []
+    return _FAOSTAT_CATALOG_CACHE
+
+
+def _search_faostat(topic: str, max_results: int = 5) -> list[dict]:
+    """Search FAOSTAT bulk catalog by client-side keyword overlap.
+
+    FAOSTAT publishes ~68 thematic country-year panel datasets (production,
+    trade, prices, land use, food security, emissions, etc.) as direct ZIP
+    bulk downloads. Each ZIP contains a normalized CSV with country × year ×
+    item × value records — ideal for development / agriculture / environment
+    econ papers using cross-country panels.
+
+    Strategy: fetch the catalog (cached) and rank entries by keyword overlap
+    against name + topic + description. Returns ZIPs that the existing
+    `_try_download_direct` flow can fetch and unzip.
+    """
+    catalog = _faostat_catalog()
+    if not catalog:
+        return []
+    print(f"  [faostat] Searching catalog for '{topic}'...")
+
+    terms = [t.lower() for t in topic.split() if len(t) > 2]
+    scored = []
+    for d in catalog:
+        haystack = " ".join([
+            d.get("DatasetName", "") or "",
+            d.get("Topic", "") or "",
+            d.get("DatasetDescription", "") or "",
+        ]).lower()
+        if not terms:
+            score = 0
+        else:
+            score = sum(1 for t in terms if t in haystack)
+            if score == 0:
+                continue
+
+        url = d.get("FileLocation") or ""
+        if not url:
+            continue
+        scored.append((score, d, url))
+
+    scored.sort(key=lambda x: -x[0])
+    results = []
+    for _, d, url in scored[:max_results]:
+        results.append({
+            "name": (d.get("DatasetName") or "")[:200],
+            "provider": f"FAOSTAT ({d.get('Topic') or 'agriculture'})",
+            "url": "https://www.fao.org/faostat/en/#data/" + (d.get("DatasetCode") or ""),
+            "download_url": url,
+            "download_format": "zip",
+            "description": (d.get("DatasetDescription") or "")[:300],
+            "published": (d.get("DateUpdate") or "")[:10],
+            "source_api": "faostat",
+        })
+    n_dl = sum(1 for x in results if x["download_url"])
+    print(f"  [faostat] Found {len(results)} datasets ({n_dl} directly downloadable)")
+    return results
+
+
+def _search_data_gouv_fr(topic: str, max_results: int = 5) -> list[dict]:
+    """Search French government open data portal (data.gouv.fr).
+
+    Uses data.gouv.fr's native API (not CKAN) — different schema:
+    `data` instead of `result.results`, and resources have lowercase keys.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [data.gouv.fr] Searching for '{topic}'...")
+    _DL_EXTS = (".csv", ".tsv", ".tab", ".dta", ".parquet", ".xlsx", ".zip", ".json")
+    try:
+        r = requests.get(
+            "https://www.data.gouv.fr/api/1/datasets/",
+            params={"q": topic, "page_size": max_results},
+            timeout=20,
+        )
+        r.raise_for_status()
+        items = r.json().get("data") or []
+        results = []
+        for item in items:
+            download_url = ""
+            download_format = ""
+            for res in (item.get("resources") or []):
+                fmt = (res.get("format") or "").lower()
+                ru = res.get("url") or ""
+                if ru.lower().endswith(_DL_EXTS) or fmt in {"csv", "tsv", "dta", "parquet", "xlsx", "zip", "json"}:
+                    download_url = ru
+                    download_format = fmt or Path(ru).suffix.lstrip(".")
+                    break
+            org = (item.get("organization") or {}).get("name", "data.gouv.fr")
+            results.append({
+                "name": (item.get("title") or "")[:200],
+                "provider": f"data.gouv.fr ({org})",
+                "url": item.get("page", "") or item.get("uri", ""),
+                "download_url": download_url,
+                "download_format": download_format,
+                "description": (item.get("description") or "")[:300],
+                "published": (item.get("created_at") or "")[:10],
+                "source_api": "data_gouv_fr",
+            })
+        print(f"  [data.gouv.fr] Found {len(results)} datasets "
+              f"({sum(1 for r in results if r['download_url'])} directly downloadable)")
+        return results
+    except Exception as e:
+        print(f"  [data.gouv.fr] Error: {e}")
+        return []
+
+
+# ── Path A: download dataset from repo (legacy, kept for reference) ───────────
+
+def _download_repo_dataset(repos: list[dict], project_dir: Path) -> Optional[str]:
+    """Try to download a dataset from the best GitHub repo.
+
+    Attempts each repo in order. Returns the local path if successful, None otherwise.
+    """
+    try:
+        import requests
+    except ImportError:
+        print("  [warn] requests not installed — skipping repo dataset download")
+        return None
+
+    data_dir = project_dir / "data" / "raw"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    SUPPORTED_EXTS = {".csv", ".dta", ".xlsx", ".xls", ".parquet", ".json"}
+
+    for repo in repos[:3]:  # Try top 3 repos
+        url = repo.get("url", "")
+        dataset_url = repo.get("dataset_url", "")
+
+        # If Claude provided a direct dataset URL, use it
+        if dataset_url:
+            try:
+                print(f"  [download] Trying direct URL: {dataset_url[:80]}...")
+                resp = requests.get(dataset_url, timeout=60, allow_redirects=True)
+                if resp.status_code == 200 and len(resp.content) > 1000:
+                    # Guess extension from URL or content-type
+                    from urllib.parse import urlparse
+                    parsed = urlparse(dataset_url)
+                    ext = Path(parsed.path).suffix.lower()
+                    if ext not in SUPPORTED_EXTS:
+                        ext = ".csv"  # default
+                    local_path = data_dir / f"repo_dataset{ext}"
+                    local_path.write_bytes(resp.content)
+                    size_mb = len(resp.content) / (1024 * 1024)
+                    print(f"  [download] Saved {local_path.name} ({size_mb:.1f} MB)")
+                    return str(local_path)
+            except Exception as e:
+                print(f"  [download] Direct URL failed: {e}")
+
+        # Try GitHub API to find dataset files in the repo
+        if "github.com" in url:
+            try:
+                # Extract owner/repo from URL
+                parts = url.rstrip("/").split("github.com/")[-1].split("/")
+                if len(parts) >= 2:
+                    owner, repo_name = parts[0], parts[1]
+                    api_url = f"https://api.github.com/repos/{owner}/{repo_name}/git/trees/main?recursive=1"
+                    resp = requests.get(api_url, timeout=30)
+                    if resp.status_code != 200:
+                        # Try 'master' branch
+                        api_url = api_url.replace("/main?", "/master?")
+                        resp = requests.get(api_url, timeout=30)
+
+                    if resp.status_code == 200:
+                        tree = resp.json().get("tree", [])
+                        # Find data files, prefer .csv and .dta
+                        data_files = []
+                        for item in tree:
+                            if item["type"] == "blob":
+                                fpath = item["path"]
+                                ext = Path(fpath).suffix.lower()
+                                if ext in SUPPORTED_EXTS:
+                                    # Prioritize files in data/ directories or with data-like names
+                                    priority = 0
+                                    fl = fpath.lower()
+                                    if "data" in fl:
+                                        priority += 2
+                                    if ext == ".dta":
+                                        priority += 1  # Stata files more likely to be analysis-ready
+                                    if ext == ".csv":
+                                        priority += 1
+                                    data_files.append((priority, fpath, ext))
+
+                        if data_files:
+                            data_files.sort(key=lambda x: -x[0])
+                            best_priority, best_path, best_ext = data_files[0]
+                            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo_name}/main/{best_path}"
+                            print(f"  [download] Found {best_path} in {owner}/{repo_name}...")
+                            resp = requests.get(raw_url, timeout=120)
+                            if resp.status_code != 200:
+                                raw_url = raw_url.replace("/main/", "/master/")
+                                resp = requests.get(raw_url, timeout=120)
+
+                            if resp.status_code == 200 and len(resp.content) > 500:
+                                local_path = data_dir / f"repo_dataset{best_ext}"
+                                local_path.write_bytes(resp.content)
+                                size_mb = len(resp.content) / (1024 * 1024)
+                                print(f"  [download] Saved {local_path.name} ({size_mb:.1f} MB)")
+                                return str(local_path)
+            except Exception as e:
+                print(f"  [download] GitHub API failed for {url}: {e}")
+
+    print("  [download] Could not download dataset from any repo")
+    return None
+
+
+# ── Path B: data profiling ───────────────────────────────────────────────────
+
+def _load_dataframe(data_path: str):
+    """Load a dataset into a pandas DataFrame."""
+    import pandas as pd
+
+    p = Path(data_path)
+    if not p.exists():
+        print(f"  [error] Dataset not found: {data_path}")
+        sys.exit(1)
+
+    ext = p.suffix.lower()
+    if ext == ".csv":
+        try:
+            df = pd.read_csv(p, encoding="utf-8", low_memory=False)
+        except UnicodeDecodeError:
+            df = pd.read_csv(p, encoding="latin-1", low_memory=False)
+    elif ext in (".xls", ".xlsx"):
+        df = pd.read_excel(p)
+    elif ext == ".dta":
+        df = pd.read_stata(p)
+    elif ext == ".parquet":
+        df = pd.read_parquet(p)
+    elif ext == ".json":
+        df = pd.read_json(p)
+    elif ext in (".tab", ".tsv"):
+        try:
+            df = pd.read_csv(p, sep="\t", encoding="utf-8", low_memory=False)
+        except UnicodeDecodeError:
+            df = pd.read_csv(p, sep="\t", encoding="latin-1", low_memory=False)
+    else:
+        raise ValueError(f"Unsupported format: {ext}. Use .csv, .xlsx, .dta, .parquet, .tab, or .json")
+
+    return df
+
+
+def _detect_wide_panel_suffixes(df) -> dict:
+    """Detect wide-format panel data where time is encoded in column name suffixes.
+
+    Common patterns:
+      - variable_20, variable_21, variable_22  (2-digit year suffixes)
+      - variable_2020, variable_2021           (4-digit year suffixes)
+      - variable_t1, variable_t2               (wave suffixes)
+
+    Returns dict with keys: detected (bool), year_suffixes, n_periods,
+    suffix_pattern, base_variables, suffix_to_year_map.
+    """
+    import re
+    from collections import Counter
+
+    cols = list(df.columns)
+    result = {"detected": False}
+
+    # ── Pattern 1: 2-digit year suffixes (_20, _21, _22, etc.) ─────────
+    # Match columns ending in _DD where DD is a plausible 2-digit year
+    suffix_2d = re.compile(r'^(.+?)[_](\d{2})$')
+    two_digit_suffixes = Counter()
+    two_digit_bases = {}
+    for col in cols:
+        m = suffix_2d.match(col)
+        if m:
+            base, suffix = m.group(1), m.group(2)
+            year_int = int(suffix)
+            # Plausible 2-digit years: 00-30 (2000-2030) or 80-99 (1980-1999)
+            if (0 <= year_int <= 30) or (80 <= year_int <= 99):
+                two_digit_suffixes[suffix] += 1
+                if suffix not in two_digit_bases:
+                    two_digit_bases[suffix] = []
+                two_digit_bases[suffix].append(base)
+
+    # ── Pattern 2: 4-digit year suffixes (_2020, _2021, etc.) ──────────
+    suffix_4d = re.compile(r'^(.+?)[_](\d{4})$')
+    four_digit_suffixes = Counter()
+    four_digit_bases = {}
+    for col in cols:
+        m = suffix_4d.match(col)
+        if m:
+            base, suffix = m.group(1), m.group(2)
+            year_int = int(suffix)
+            if 1980 <= year_int <= 2030:
+                four_digit_suffixes[suffix] += 1
+                if suffix not in four_digit_bases:
+                    four_digit_bases[suffix] = []
+                four_digit_bases[suffix].append(base)
+
+    # ── Decide which pattern is dominant ───────────────────────────────
+    # A suffix group is "real" if at least 3 different suffixes share many
+    # base variable names, indicating the same variables across years
+    best_pattern = None
+    best_suffixes = {}
+    best_bases = {}
+
+    for label, sfx_counts, sfx_bases in [
+        ("2-digit-year", two_digit_suffixes, two_digit_bases),
+        ("4-digit-year", four_digit_suffixes, four_digit_bases),
+    ]:
+        if len(sfx_counts) < 2:
+            continue
+        # Check how many bases are shared across at least 2 suffixes
+        all_base_sets = {s: set(bases) for s, bases in sfx_bases.items()}
+        suffix_list = sorted(all_base_sets.keys())
+        # Count bases that appear in 2+ suffix groups
+        base_counter = Counter()
+        for s in suffix_list:
+            for b in all_base_sets[s]:
+                base_counter[b] += 1
+        shared_bases = sum(1 for b, c in base_counter.items() if c >= 2)
+
+        # Need a meaningful number of shared bases (at least 10 or 5% of columns)
+        min_shared = max(10, len(cols) * 0.02)
+        if shared_bases >= min_shared:
+            # This pattern is stronger than current best?
+            if best_pattern is None or shared_bases > sum(1 for b, c in Counter(
+                b for bases in best_bases.values() for b in bases
+            ).items() if c >= 2):
+                best_pattern = label
+                best_suffixes = sfx_counts
+                best_bases = sfx_bases
+
+    if best_pattern is None:
+        return result
+
+    # ── Build the result ───────────────────────────────────────────────
+    sorted_suffixes = sorted(best_suffixes.keys())
+    n_periods = len(sorted_suffixes)
+
+    # Map suffixes to full years
+    if best_pattern == "2-digit-year":
+        suffix_to_year = {}
+        for s in sorted_suffixes:
+            y = int(s)
+            suffix_to_year[s] = 2000 + y if y <= 30 else 1900 + y
+    else:
+        suffix_to_year = {s: int(s) for s in sorted_suffixes}
+
+    # Find base variables shared across ALL suffixes (core panel vars)
+    all_base_sets = {s: set(bases) for s, bases in best_bases.items()}
+    core_bases = set.intersection(*all_base_sets.values()) if all_base_sets else set()
+
+    # Find columns that DON'T have any year suffix (time-invariant / IDs)
+    suffixed_cols = set()
+    for bases in best_bases.values():
+        for b in bases:
+            for s in sorted_suffixes:
+                cand = f"{b}_{s}"
+                if cand in df.columns:
+                    suffixed_cols.add(cand)
+    unsuffixed_cols = [c for c in cols if c not in suffixed_cols]
+
+    result = {
+        "detected": True,
+        "pattern": best_pattern,
+        "year_suffixes": sorted_suffixes,
+        "year_values": [suffix_to_year[s] for s in sorted_suffixes],
+        "n_periods": n_periods,
+        "n_suffixed_vars_per_period": {s: best_suffixes[s] for s in sorted_suffixes},
+        "n_core_base_vars": len(core_bases),
+        "core_base_vars_sample": sorted(list(core_bases))[:20],
+        "unsuffixed_cols": unsuffixed_cols[:30],
+        "suffix_to_year": suffix_to_year,
+    }
+    return result
+
+
+def _detect_id_and_time_columns(df) -> dict:
+    """Detect likely ID columns and time columns using heuristics.
+
+    Handles both long-format (time in a column) and wide-format (time encoded
+    in column name suffixes like variable_20, variable_21).
+
+    Returns dict with keys: id_cols, time_cols, structure, panel_details,
+    wide_panel (optional).
+    """
+    rows = len(df)
+    cols_lower = {c: c.lower() for c in df.columns}
+
+    # ── Check for wide-format panel first ──────────────────────────────
+    wide_info = _detect_wide_panel_suffixes(df)
+
+    # ── Candidate ID columns ────────────────────────────────────────────
+    # Common ID column name patterns
+    id_patterns = [
+        "id", "codigo", "codperso", "cod_perso", "conglome", "vivienda",
+        "hogar", "nconglom", "ubigeo", "folio", "ident", "person",
+        "household", "hh_id", "pid", "hhid", "indiv",
+    ]
+    id_candidates = []
+    for col in df.columns:
+        cl = cols_lower[col]
+        if any(pat in cl for pat in id_patterns):
+            id_candidates.append(col)
+
+    # ── Candidate time columns ──────────────────────────────────────────
+    time_patterns = [
+        "año", "anio", "year", "mes", "month", "periodo", "period",
+        "trimestre", "quarter", "fecha", "date", "wave", "round",
+    ]
+    time_candidates = []
+    for col in df.columns:
+        cl = cols_lower[col]
+        if any(pat in cl for pat in time_patterns):
+            time_candidates.append(col)
+
+    # Also check for datetime dtype columns
+    for col in df.columns:
+        if str(df[col].dtype).startswith("datetime"):
+            if col not in time_candidates:
+                time_candidates.append(col)
+
+    # ── If wide panel detected, filter out suffixed false positives ────
+    # Columns like aÑo_20, aÑo_21 are NOT real time columns — they are
+    # year-suffixed variants of the same variable
+    if wide_info["detected"]:
+        import re
+        suffixes = wide_info["year_suffixes"]
+        suffix_pattern = re.compile(r'^(.+?)[_](' + '|'.join(suffixes) + r')$')
+        # Remove time candidates that are actually suffixed columns
+        time_candidates_clean = []
+        for col in time_candidates:
+            if not suffix_pattern.match(col):
+                time_candidates_clean.append(col)
+        time_candidates = time_candidates_clean
+
+        # Similarly clean ID candidates — remove suffixed versions
+        id_candidates_clean = []
+        for col in id_candidates:
+            if not suffix_pattern.match(col):
+                id_candidates_clean.append(col)
+        id_candidates = id_candidates_clean
+
+    # ── Determine data structure ────────────────────────────────────────
+    structure = "cross-sectional"  # default
+    panel_details = {}
+
+    # ── Wide-format panel takes priority if detected ───────────────────
+    if wide_info["detected"] and wide_info["n_periods"] >= 2:
+        structure = "wide-panel"
+        panel_details = {
+            "format": "wide",
+            "n_time_periods": wide_info["n_periods"],
+            "time_values": wide_info["year_values"],
+            "year_suffixes": wide_info["year_suffixes"],
+            "suffix_pattern": wide_info["pattern"],
+            "n_core_vars": wide_info["n_core_base_vars"],
+            "core_vars_sample": wide_info["core_base_vars_sample"],
+            "unsuffixed_cols": wide_info["unsuffixed_cols"],
+            "vars_per_period": wide_info["n_suffixed_vars_per_period"],
+            "note": (
+                "Data is in WIDE format — each time period's variables have a year suffix "
+                f"(e.g., {wide_info['core_base_vars_sample'][0]}_{wide_info['year_suffixes'][0]}, "
+                f"{wide_info['core_base_vars_sample'][0]}_{wide_info['year_suffixes'][-1]}). "
+                "Must reshape to long format for panel econometrics."
+            ) if wide_info["core_base_vars_sample"] else "Wide-format panel detected.",
+        }
+        # Also try long-format detection as secondary info
+        if id_candidates and time_candidates:
+            panel_details["long_format_id_candidates"] = id_candidates[:5]
+            panel_details["long_format_time_candidates"] = time_candidates[:5]
+
+    elif id_candidates and time_candidates:
+        # Standard long-format detection
+        best_id = id_candidates[0]
+        best_time = time_candidates[0]
+
+        n_unique_ids = df[best_id].nunique()
+        n_unique_times = df[best_time].nunique()
+
+        # Panel = same IDs appear across multiple time periods
+        # Key test: group by ID, count distinct time values per ID
+        if n_unique_times >= 2:
+            times_per_id = df.groupby(best_id)[best_time].nunique()
+            ids_with_multiple_times = (times_per_id > 1).sum()
+            pct_panel = ids_with_multiple_times / n_unique_ids * 100
+
+            if pct_panel >= 30:
+                structure = "panel"
+                panel_details = {
+                    "format": "long",
+                    "id_column": best_id,
+                    "time_column": best_time,
+                    "n_unique_ids": int(n_unique_ids),
+                    "n_time_periods": int(n_unique_times),
+                    "time_values": sorted(df[best_time].dropna().unique().tolist())[:20],
+                    "pct_ids_multiple_periods": round(pct_panel, 1),
+                    "avg_obs_per_id": round(rows / n_unique_ids, 1),
+                }
+            else:
+                structure = "pooled-cross-sections"
+                panel_details = {
+                    "format": "long",
+                    "id_column": best_id,
+                    "time_column": best_time,
+                    "n_unique_ids": int(n_unique_ids),
+                    "n_time_periods": int(n_unique_times),
+                    "time_values": sorted(df[best_time].dropna().unique().tolist())[:20],
+                    "pct_ids_multiple_periods": round(pct_panel, 1),
+                    "note": "Different individuals sampled each period — NOT panel tracking",
+                }
+        elif n_unique_times == 1:
+            structure = "cross-sectional"
+            panel_details = {
+                "time_column": best_time,
+                "single_period": str(df[best_time].iloc[0]),
+            }
+    elif time_candidates and not id_candidates:
+        best_time = time_candidates[0]
+        n_unique_times = df[best_time].nunique()
+        if n_unique_times >= 2:
+            structure = "repeated-cross-sections"
+            panel_details = {
+                "time_column": best_time,
+                "n_time_periods": int(n_unique_times),
+                "time_values": sorted(df[best_time].dropna().unique().tolist())[:20],
+                "note": "Multiple time periods but no individual ID for tracking",
+            }
+
+    return {
+        "id_cols": id_candidates,
+        "time_cols": time_candidates,
+        "structure": structure,
+        "panel_details": panel_details,
+        "wide_panel": wide_info if wide_info["detected"] else None,
+    }
+
+
+def _generate_data_summary(df) -> str:
+    """Generate a compact, structured summary of the dataset for Claude.
+
+    Groups variables by prefix to keep the summary under ~3K chars even for
+    datasets with 1000+ columns (e.g., ENAHO with 1425 variables).
+    """
+    import re
+    rows, cols = df.shape
+
+    lines = [
+        f"Rows: {rows:,}",
+        f"Columns: {cols}",
+        f"Numeric: {len(df.select_dtypes(include='number').columns)} | "
+        f"Categorical: {len(df.select_dtypes(include='object').columns)} | "
+        f"Datetime: {len(df.select_dtypes(include='datetime').columns)}",
+    ]
+
+    # ── Group variables by prefix ─────────────────────────────────────
+    # Extract prefix: letters before digits (P500 -> P5, UBIGEO -> UBIGEO)
+    prefix_groups = {}
+    for col in df.columns:
+        match = re.match(r'^([A-Za-z]+\d{0,2})', col)
+        prefix = match.group(1) if match else col[:6]
+        if prefix not in prefix_groups:
+            prefix_groups[prefix] = []
+        prefix_groups[prefix].append(col)
+
+    # Sort by prefix, merge small groups
+    lines.append("\n## Variable Groups (by prefix)")
+    sorted_prefixes = sorted(prefix_groups.keys())
+    for prefix in sorted_prefixes:
+        group_cols = prefix_groups[prefix]
+        n_vars = len(group_cols)
+        if n_vars == 1:
+            # Single variable — show inline stats
+            col = group_cols[0]
+            nuniq = df[col].nunique()
+            miss_pct = df[col].isnull().mean() * 100
+            if df[col].dtype in ("float64", "int64", "float32", "int32"):
+                lines.append(
+                    f"  {col}: numeric, {nuniq} unique, "
+                    f"mean={df[col].mean():.2f}, miss={miss_pct:.0f}%"
+                )
+            else:
+                vals = df[col].dropna().unique().tolist()[:5]
+                lines.append(
+                    f"  {col}: {nuniq} unique vals, miss={miss_pct:.0f}% — {vals}"
+                )
+        else:
+            # Group of variables — show summary
+            col_range = f"{group_cols[0]}..{group_cols[-1]}" if n_vars > 2 else ", ".join(group_cols)
+            avg_miss = df[group_cols].isnull().mean().mean() * 100
+            n_numeric = sum(1 for c in group_cols if df[c].dtype in ("float64", "int64", "float32", "int32"))
+            lines.append(
+                f"  {prefix}* ({n_vars} vars): {col_range} | "
+                f"{n_numeric} numeric, {n_vars - n_numeric} categorical | "
+                f"avg miss={avg_miss:.0f}%"
+            )
+
+    # ── Key variables: show detailed stats for top 20 most relevant ───
+    # Heuristic: low missingness + high variance = more useful
+    lines.append("\n## Key Variables (detailed stats, top 20)")
+    numeric_cols = df.select_dtypes(include="number").columns
+    if len(numeric_cols) > 0:
+        # Score by: low missingness + moderate-to-high unique count
+        col_scores = {}
+        for col in numeric_cols:
+            miss = df[col].isnull().mean()
+            nuniq = df[col].nunique()
+            # Prefer columns with low missingness and decent variation
+            col_scores[col] = (1 - miss) * min(nuniq / 20, 1.0)
+        top_cols = sorted(col_scores, key=col_scores.get, reverse=True)[:20]
+
+        for col in top_cols:
+            s = df[col]
+            miss_pct = s.isnull().mean() * 100
+            lines.append(
+                f"  {col}: mean={s.mean():.2f}, median={s.median():.2f}, "
+                f"std={s.std():.2f}, min={s.min()}, max={s.max()}, "
+                f"unique={s.nunique()}, miss={miss_pct:.0f}%"
+            )
+
+    # ── Categorical variables with few unique values ──────────────────
+    cat_cols = df.select_dtypes(include="object").columns
+    useful_cats = [(c, df[c].nunique()) for c in cat_cols if df[c].nunique() <= 20]
+    if useful_cats:
+        lines.append("\n## Categorical Variables (<=20 unique)")
+        for col, nuniq in sorted(useful_cats, key=lambda x: x[1])[:15]:
+            vals = df[col].dropna().unique().tolist()[:10]
+            lines.append(f"  {col}: {nuniq} unique — {vals}")
+
+    # ── High missingness warning ──────────────────────────────────────
+    miss = df.isnull().mean()
+    high_miss = miss[miss > 0.5].sort_values(ascending=False)
+    if len(high_miss) > 0:
+        lines.append(f"\n## High Missingness (>50%): {len(high_miss)} variables")
+        for col, pct in high_miss.head(5).items():
+            lines.append(f"  {col}: {pct:.0%} missing")
+
+    return "\n".join(lines)
+
+
+def _profile_dataset(data_path: str) -> dict:
+    """Run deep profiling on the user's dataset.
+
+    Returns keys: rows, cols, columns, dtypes, missing_pct, structure,
+    panel_details, data_summary, sample_rows.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        print("  [error] pandas is required for Path B. Run: pip install pandas")
+        sys.exit(1)
+
+    df = _load_dataframe(data_path)
+    rows, cols = df.shape
+    missing = df.isnull().mean().to_dict()
+
+    # Deep structure detection
+    structure_info = _detect_id_and_time_columns(df)
+    data_summary = _generate_data_summary(df)
+
+    print(f"  [data] Structure detected: {structure_info['structure']}")
+    if structure_info["id_cols"]:
+        print(f"  [data] ID columns: {', '.join(structure_info['id_cols'][:5])}")
+    if structure_info["time_cols"]:
+        print(f"  [data] Time columns: {', '.join(structure_info['time_cols'][:5])}")
+    if structure_info.get("wide_panel"):
+        wp = structure_info["wide_panel"]
+        print(f"  [data] Wide-format panel detected: {wp['n_periods']} periods")
+        print(f"  [data] Year suffixes: {', '.join(wp['year_suffixes'])}")
+        print(f"  [data] Years: {wp['year_values']}")
+        print(f"  [data] Core variables across periods: {wp['n_core_base_vars']}")
+        if wp["core_base_vars_sample"]:
+            sample = ', '.join(wp['core_base_vars_sample'][:10])
+            print(f"  [data] Sample base vars: {sample}")
+    elif structure_info["panel_details"]:
+        pd_info = structure_info["panel_details"]
+        if "pct_ids_multiple_periods" in pd_info:
+            print(f"  [data] IDs in multiple periods: {pd_info['pct_ids_multiple_periods']}%")
+        if "n_time_periods" in pd_info:
+            print(f"  [data] Time periods: {pd_info['n_time_periods']}")
+
+    profile = {
+        "rows": rows,
+        "cols": cols,
+        "columns": list(df.columns),
+        "dtypes": {c: str(df[c].dtype) for c in df.columns},
+        "missing_pct": {c: round(v * 100, 1) for c, v in missing.items()},
+        "structure": structure_info["structure"],
+        "panel_flag": structure_info["structure"] in ("panel", "wide-panel"),
+        "panel_details": structure_info["panel_details"],
+        "id_cols": structure_info["id_cols"],
+        "time_cols": structure_info["time_cols"],
+        "wide_panel": structure_info.get("wide_panel"),
+        "data_summary": data_summary,
+        "sample_rows": df.head(5).to_string(),
+    }
+
+    return profile
+
+
+def _early_warning(profile: dict) -> list[str]:
+    """Check if the dataset is likely inadequate.  Returns a list of warnings."""
+    warnings = []
+    if profile["rows"] < 100:
+        warnings.append(f"Very small sample: {profile['rows']} rows (< 100). Econometric power may be insufficient.")
+    if profile["cols"] < 5:
+        warnings.append(f"Very few variables: {profile['cols']} columns (< 5). Limited scope for controls / heterogeneity.")
+    high_miss = [c for c, v in profile["missing_pct"].items() if v > 50]
+    if high_miss:
+        warnings.append(f"High missingness (>50%): {', '.join(high_miss[:5])}")
+    return warnings
+
+
+def _causal_design_warning(profile: dict) -> None:
+    """Detect limitations in the data structure that will cap the paper's score.
+
+    Prints warnings about missing pre-treatment data, limited time dimension,
+    or cross-sectional design — BEFORE the user invests hours in the pipeline.
+    """
+    structure = profile.get("structure", "cross-sectional")
+    panel_details = profile.get("panel_details", {})
+    wide_panel = profile.get("wide_panel")
+
+    # Determine time coverage
+    time_values = panel_details.get("time_values", [])
+    year_suffixes = panel_details.get("year_suffixes", [])
+    n_periods = panel_details.get("n_time_periods", len(time_values) or len(year_suffixes))
+
+    # Try to determine the earliest year in the data
+    earliest_year = None
+    if time_values:
+        try:
+            earliest_year = min(int(y) for y in time_values if str(y).isdigit())
+        except (ValueError, TypeError):
+            pass
+    if not earliest_year and year_suffixes:
+        try:
+            raw = min(int(s) for s in year_suffixes)
+            earliest_year = 2000 + raw if raw < 100 else raw
+        except (ValueError, TypeError):
+            pass
+
+    # ── Print causal design assessment ─────────────────────────────────
+    print(f"\n  {'=' * 60}")
+    print(f"  CAUSAL DESIGN ASSESSMENT")
+    print(f"  {'=' * 60}")
+
+    issues = []
+    score_ceiling = 95
+
+    # Check 1: No time dimension at all
+    if structure == "cross-sectional":
+        score_ceiling = min(score_ceiling, 70)
+        issues.append({
+            "issue": "CROSS-SECTIONAL DATA (no time dimension)",
+            "impact": "Cannot use DiD, event study, or individual FE. Score ceiling: ~70/100.",
+            "fix": "Provide panel or repeated cross-section data spanning multiple years.",
+        })
+
+    # Check 2: Panel/temporal data but no pre-treatment period
+    if structure in ("panel", "wide-panel", "pooled-cross-sections", "repeated-cross-sections"):
+        # Detect if all data is post-2020 (COVID shock)
+        if earliest_year and earliest_year >= 2020:
+            score_ceiling = min(score_ceiling, 75)
+            issues.append({
+                "issue": f"NO PRE-TREATMENT DATA (earliest year: {earliest_year})",
+                "impact": (
+                    "Cannot test parallel trends or establish a clean pre-shock baseline. "
+                    "Referees WILL ask for pre-trends. Score ceiling: ~75/100."
+                ),
+                "fix": (
+                    "Provide data from 2017-2019 (at least 2-3 pre-treatment years). "
+                    "For ENAHO: https://proyectos.inei.gob.pe/microdatos/"
+                ),
+            })
+
+        # Check if only 1-2 pre-treatment years (weak pre-trends)
+        elif earliest_year and earliest_year >= 2019 and n_periods <= 3:
+            score_ceiling = min(score_ceiling, 80)
+            issues.append({
+                "issue": f"LIMITED PRE-TREATMENT DATA (only from {earliest_year}, {n_periods} periods)",
+                "impact": "Pre-trend test possible but weak (only 1-2 pre-periods). Score ceiling: ~80/100.",
+                "fix": "Add 1-2 more pre-treatment years for robust pre-trend testing.",
+            })
+
+    # Check 3: Short panel (few periods)
+    if n_periods and n_periods < 3 and structure in ("panel", "wide-panel"):
+        score_ceiling = min(score_ceiling, 80)
+        issues.append({
+            "issue": f"SHORT PANEL ({n_periods} periods only)",
+            "impact": "Limited power for event study dynamics. Cannot show pre/post trajectory.",
+            "fix": "Extend the panel to at least 4-5 periods (2+ pre, 2+ post treatment).",
+        })
+
+    # Check 4: Panel with very few time periods for dynamic effects
+    if structure in ("panel", "wide-panel") and n_periods and n_periods >= 3:
+        pre_periods = sum(1 for y in (time_values or []) if isinstance(y, (int, float)) and y < 2020)
+        if wide_panel and year_suffixes:
+            pre_periods = sum(1 for s in year_suffixes
+                              if (2000 + int(s) if int(s) < 100 else int(s)) < 2020)
+        post_periods = n_periods - pre_periods - 1  # -1 for treatment year
+        if pre_periods == 0 and post_periods >= 2:
+            # Already covered by Check 2, but add specific note
+            pass
+        elif pre_periods >= 2 and post_periods >= 2:
+            print(f"\n  [ok] STRONG DESIGN POTENTIAL")
+            print(f"       {pre_periods} pre-treatment + {post_periods} post-treatment periods")
+            print(f"       Enables: DiD, event study with pre-trends, individual FE")
+            print(f"       Score ceiling: ~90-95/100")
+
+    # Print issues
+    if issues:
+        print(f"\n  Score ceiling with current data: ~{score_ceiling}/100\n")
+        for i, w in enumerate(issues, 1):
+            print(f"  [{i}] {w['issue']}")
+            print(f"      Impact: {w['impact']}")
+            print(f"      To fix: {w['fix']}")
+            print()
+
+        print(f"  These limitations are inherent to the DATA, not the methodology.")
+        print(f"  The pipeline will proceed, but the final score will be capped")
+        print(f"  regardless of how well the paper is written.")
+    else:
+        if score_ceiling >= 85:
+            print(f"\n  [ok] Data structure supports strong causal designs.")
+            print(f"       Score ceiling: ~{score_ceiling}/100")
+        else:
+            print(f"\n  [ok] No major structural limitations detected.")
+            print(f"       Score ceiling: ~{score_ceiling}/100")
+
+    print(f"  {'=' * 60}")
+
+
+# ── Path C: data-first discovery ──────────────────────────────────────────────
+
+def _run_path_c(project_dir: Path, state: dict) -> dict:
+    """Path C: Search for high-quality datasets first, then suggest topics.
+
+    1. Search APIs with broad queries for panel/causal datasets
+    2. Download and profile top candidates
+    3. Run feasibility assessment — keep only score_ceiling >= 85
+    4. For qualifying datasets, ask Claude to suggest research topics
+    5. User picks dataset + topic
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from .stage1_5_data_loading import (
+        _profile_dataset, _early_warning, _assess_feasibility,
+        _try_download_dataverse, _try_download_zenodo, _try_download_direct,
+    )
+    import time as _time
+
+    print(f"\n{'=' * 60}")
+    print(f"STAGE 1: Discovery - Path C (data-first)")
+    print("=" * 60)
+    print("  Searching for high-quality datasets worldwide...")
+    print("  Goal: find datasets that can support a 85+ score paper\n")
+
+    t0 = _time.time()
+
+    # ── Phase 1: Search for datasets using registry + journal search ────
+    all_candidates = []
+
+    # ── Detect datasets already used in previous projects ─────────────
+    from ..config import PAPERS_HQ
+    from ..dataset_registry import (
+        get_curated_datasets, search_multiple_journals,
+        build_search_plan, JOURNAL_COLLECTIONS,
+    )
+
+    projects_dir = PAPERS_HQ / "projects"
+    used_datasets = set()
+    if projects_dir.exists():
+        for proj in projects_dir.iterdir():
+            if not proj.is_dir():
+                continue
+            state_file = proj / "pipeline_state.json"
+            if state_file.exists():
+                try:
+                    prev_state = json.loads(state_file.read_text(encoding="utf-8"))
+                    prev_data = prev_state.get("stages", {}).get("stage1", {}).get("data_path", "")
+                    if prev_data:
+                        used_datasets.add(Path(prev_data).name.lower())
+                except Exception:
+                    pass
+    if used_datasets:
+        print(f"  [search] Excluding {len(used_datasets)} datasets from previous projects:")
+        for d in sorted(used_datasets):
+            print(f"    - {d}")
+
+    # ── Strategy: Curated registry + journal-directed search ──────────
+    # Phase 1a: Get curated datasets (verified, with metadata)
+    # Phase 1b: Search journal Dataverse/Zenodo collections (new datasets)
+    # Phase 1c: Optional Claude web search (slow, used as supplement)
+
+    print("  [search] Phase 1a: Loading curated datasets from registry...")
+
+    # ── Phase 1a: Get curated datasets (verified, with metadata) ──────
+    curated = get_curated_datasets(exclude_names=used_datasets)
+    print(f"  [search] Curated registry: {len(curated)} datasets available")
+    for ds in curated[:5]:
+        print(f"    - [Tier {ds.get('design_tier', '?')}] {ds.get('title', '?')[:60]}")
+
+    # ── Phase 1b: Search journal Dataverse/Zenodo collections ─────────
+    print(f"\n  [search] Phase 1b: Searching journal collections...")
+    import random
+    random.seed(int(_time.time()) % 100000)
+
+    # Pick journals to search (rotate for diversity)
+    top_journals = ["QJE", "REStat", "JPE"]
+    other_journals = [k for k in JOURNAL_COLLECTIONS if k not in top_journals]
+    random.shuffle(other_journals)
+    search_journals = top_journals[:2] + other_journals[:2]
+
+    journal_results = search_multiple_journals(
+        journal_keys=search_journals, max_per_journal=3
+    )
+
+    # Filter out already-used datasets
+    journal_results = [
+        r for r in journal_results
+        if not any(used in r.get("name", "").lower() for used in used_datasets)
+    ]
+    print(f"  [search] Journal search: {len(journal_results)} new datasets")
+
+    # ── Phase 1c: open-data portals with downloadable file resources ──
+    # All sources here expose direct file URLs (no auth, no licensing) so
+    # they fit Path C's download-and-validate flow. DBnomics and World Bank
+    # are excluded because they return JSON APIs not files. The downstream
+    # quality filter (Q1-Q8) + _MIN_ROWS / _MIN_COLS / _MIN_SCORE_CEILING
+    # thresholds reject anything below paper-quality, so no need to gate
+    # on causal structure here — bad candidates are filtered post-download.
+    print(f"\n  [search] Phase 1c: Searching 12 open-data portals...")
+    portal_results = []
+    # English queries hit the anglo + EU/IDB portals + Socrata; native-language
+    # queries hit the FR/DE/IT/MX portals (English barely matches anything).
+    # FAOSTAT uses agriculture/development-themed queries since it's domain
+    # specific.
+    en_queries = [
+        "panel survey",
+        "longitudinal household",
+        "policy evaluation",
+        "impact evaluation",
+    ]
+    fr_queries = ["enquête ménages", "panel santé"]
+    de_queries = ["arbeitslosigkeit", "haushaltsbefragung"]
+    it_queries = ["occupazione", "famiglia panel"]
+    es_queries = ["encuesta hogares", "evaluación impacto"]
+    fao_queries = ["food security", "agricultural production",
+                   "emissions agriculture", "land use crops"]
+
+    random.shuffle(en_queries)
+    for q in en_queries[:2]:
+        portal_results.extend(_search_datagov(q, max_results=3))
+        portal_results.extend(_search_idb(q, max_results=3))
+        portal_results.extend(_search_eu_opendata(q, max_results=3))
+        portal_results.extend(_search_data_gov_uk(q, max_results=3))
+        portal_results.extend(_search_data_gov_au(q, max_results=3))
+        portal_results.extend(_search_open_canada(q, max_results=3))
+        # Socrata federated catalog responds well to English queries
+        portal_results.extend(_search_socrata(q, max_results=3))
+
+    # Native-language portals: 1 query each (they only contribute when the
+    # topic happens to match their language anyway)
+    portal_results.extend(_search_data_gouv_fr(random.choice(fr_queries), max_results=3))
+    portal_results.extend(_search_govdata_de(random.choice(de_queries), max_results=3))
+    portal_results.extend(_search_dati_gov_it(random.choice(it_queries), max_results=3))
+    portal_results.extend(_search_datos_gob_mx(random.choice(es_queries), max_results=3))
+
+    # FAOSTAT bulk catalog (agriculture / food / environment country panels)
+    portal_results.extend(_search_faostat(random.choice(fao_queries), max_results=3))
+
+    # Keep only candidates that actually expose a downloadable file —
+    # Path C cannot profile metadata-only entries.
+    downloadable_portal = [r for r in portal_results if r.get("download_url")]
+
+    # Filter out already-used and dedupe by download URL
+    seen_dl = set()
+    filtered_portal = []
+    for r in downloadable_portal:
+        dl = r.get("download_url", "")
+        if dl in seen_dl:
+            continue
+        seen_dl.add(dl)
+        if any(used in r.get("name", "").lower() for used in used_datasets):
+            continue
+        filtered_portal.append(r)
+    print(f"  [search] Open-data portals: {len(filtered_portal)} downloadable candidates "
+          f"(from {len(portal_results)} total metadata hits)")
+
+    # ── Combine: curated first, then journal results ──────────────────
+    CURATED_PACKAGES = []
+
+    for ds in curated:
+        CURATED_PACKAGES.append({
+            "title": ds.get("title", ""),
+            "dataverse_doi": ds.get("dataverse_doi", ""),
+            "url": ds.get("url", ""),
+            "method": ds.get("design", "unknown"),
+            "area": ds.get("area", "mixed"),
+            "design_tier": ds.get("design_tier", 3),
+            "provider": f"Registry ({ds.get('journal', '?')})",
+            "score_ceiling": ds.get("score_ceiling", 80),
+        })
+
+    for jr in journal_results:
+        CURATED_PACKAGES.append({
+            "title": jr.get("name", "")[:70],
+            "dataverse_doi": jr.get("doi", ""),
+            "url": jr.get("url", ""),
+            "method": "unknown",
+            "area": "mixed",
+            "design_tier": 2,
+            "provider": jr.get("provider", "Journal Search"),
+        })
+
+    # Phase 1c contributions: open-data portals (data.gov + IDB)
+    # Use download_url as the primary URL so the existing download loop
+    # (which calls _try_download_direct as fallback) hits the file directly.
+    # design_tier=3 by default — these are unverified for causal structure;
+    # the post-download Q1-Q8 quality filter is the real gate.
+    for pr in filtered_portal:
+        CURATED_PACKAGES.append({
+            "title": pr.get("name", "")[:70],
+            "dataverse_doi": "",
+            "url": pr.get("download_url") or pr.get("url", ""),
+            "method": "unknown",
+            "area": "mixed",
+            "design_tier": 3,
+            "provider": pr.get("provider", "Open Data Portal"),
+        })
+
+    # Sort by tier
+    packages = sorted(CURATED_PACKAGES, key=lambda x: x.get("design_tier", 9))
+
+    n_t1 = sum(1 for p in packages if p.get("design_tier") == 1)
+    n_t2 = sum(1 for p in packages if p.get("design_tier") == 2)
+    n_t3 = sum(1 for p in packages if p.get("design_tier", 9) >= 3)
+    print(f"\n  [search] Combined: {n_t1} tier-1 (RCT), {n_t2} tier-2, {n_t3} tier-3+")
+
+    replication_papers = packages
+    print(f"  [search] {len(replication_papers)} total candidates")
+
+    # Convert packages to candidates with DOIs or URLs
+    for paper in replication_papers:
+        doi = paper.get("dataverse_doi", "")
+        direct_url = paper.get("url", "")
+
+        if doi:
+            url = f"https://doi.org/{doi}" if not doi.startswith("http") else doi
+        elif direct_url:
+            url = direct_url
+        else:
+            continue
+
+        all_candidates.append({
+            "name": paper.get("title", "Unknown"),
+            "provider": paper.get("provider", "Harvard Dataverse"),
+            "url": url,
+            "description": paper.get("data_description", ""),
+            "method": paper.get("method", ""),
+            "area": paper.get("area", ""),
+        })
+
+    # ── Fallback: also search APIs directly if curated list somehow empty
+    if len(all_candidates) < 3:
+        print("  [search] Phase 2: Supplementing with direct API search...")
+        for q in ["replication wages panel", "replication education RCT"]:
+            results = _search_dataverse(q, max_results=2)
+            all_candidates.extend(results)
+
+    # Deduplicate by URL
+    seen_urls = set()
+    unique_candidates = []
+    for c in all_candidates:
+        url = c.get("url", "")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            unique_candidates.append(c)
+
+    elapsed = _time.time() - t0
+    print(f"\n  [search] Found {len(unique_candidates)} unique candidates ({elapsed:.0f}s)")
+
+    # ── Phase 2: Download and profile ─────────────────────────────────
+    print(f"\n  [download] Attempting to download top candidates...\n")
+    data_dir = project_dir / "data" / "external"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    qualified = []  # datasets with score_ceiling >= 85
+    attempted = 0
+    MAX_ATTEMPTS = 15  # try more candidates to find qualifying datasets
+
+    # Pre-filter: remove candidates with known-bad DOIs.
+    # Budget split: 7 slots for curated/journal (tier 1-2 priority) + 8
+    # reserved slots for open-data portals so they get a fair chance to be
+    # tried even though they sort last by design_tier. Increased from 7 to 8
+    # because Phase 1c now queries 12 portals (added Socrata + FAOSTAT).
+    from ..dataset_registry import _KNOWN_BAD_DOIS
+    PORTAL_RESERVED = 8
+    MAIN_BUDGET = MAX_ATTEMPTS - PORTAL_RESERVED
+
+    portal_provider_marks = (
+        "data.gov", "idb numbers", "open data portal",
+        "eu open data", "data.gov.uk", "data.gouv.fr",
+        "data.gov.au", "open.canada.ca", "datos.gob.mx",
+        "govdata.de", "dati.gov.it",
+        "socrata", "faostat",
+    )
+    is_portal = lambda c: any(m in c.get("provider", "").lower() for m in portal_provider_marks)
+
+    pre_filtered = []
+    portal_pool = []
+    n_skipped_bad = 0
+    for c in unique_candidates[:MAX_ATTEMPTS * 3]:
+        doi = ""
+        c_url = c.get("url", "")
+        if "10.7910/DVN/" in c_url:
+            import re as _re_doi
+            m = _re_doi.search(r'(10\.7910/DVN/\w+)', c_url)
+            if m:
+                doi = m.group(1)
+        if doi and doi in _KNOWN_BAD_DOIS:
+            n_skipped_bad += 1
+            continue
+
+        if is_portal(c):
+            if len(portal_pool) < PORTAL_RESERVED:
+                portal_pool.append(c)
+        else:
+            if len(pre_filtered) < MAIN_BUDGET:
+                pre_filtered.append(c)
+
+        if len(pre_filtered) >= MAIN_BUDGET and len(portal_pool) >= PORTAL_RESERVED:
+            break
+
+    # Append portal candidates after the main pool so registry/journal entries
+    # are still tried first (preserving Path C's "validated first" priority).
+    pre_filtered.extend(portal_pool)
+
+    if n_skipped_bad > 0:
+        print(f"  [filter] Skipped {n_skipped_bad} known-bad DOIs from previous validation runs")
+    if portal_pool:
+        print(f"  [filter] Reserved {len(portal_pool)} slots for open-data portal candidates")
+
+    for i, candidate in enumerate(pre_filtered):
+        attempted += 1
+        name = candidate.get("name", "Unknown")[:60]
+        url = candidate.get("url", "")
+        provider = candidate.get("provider", "").lower()
+        print(f"  [{attempted}/{min(len(pre_filtered), MAX_ATTEMPTS)}] {name}")
+
+        # Try to download
+        local_path = None
+        if "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
+            local_path = _try_download_dataverse(url, data_dir)
+        elif "zenodo" in provider or "zenodo.org" in url:
+            local_path = _try_download_zenodo(url, data_dir)
+        if not local_path:
+            local_path = _try_download_direct(url, data_dir)
+
+        if not local_path:
+            print(f"       [skip] Could not download")
+            continue
+
+        # Quick pre-check: read just the header + first 10 rows to validate
+        # before expensive full profiling
+        try:
+            import pandas as _pd_quick
+            _lp = str(local_path)
+            if _lp.endswith(".dta"):
+                _df_quick = _pd_quick.read_stata(_lp, iterator=True).read(10)
+            elif _lp.endswith(".tab"):
+                _df_quick = _pd_quick.read_csv(_lp, sep="\t", encoding="utf-8",
+                                                nrows=10, low_memory=False)
+            elif _lp.endswith((".csv", ".tsv")):
+                _df_quick = _pd_quick.read_csv(_lp, encoding="latin-1",
+                                                nrows=10, low_memory=False)
+            else:
+                _df_quick = None
+
+            if _df_quick is not None:
+                n_cols_quick = len(_df_quick.columns)
+                if n_cols_quick < 5:
+                    print(f"       [skip] Only {n_cols_quick} columns — too few for analysis")
+                    continue
+            del _df_quick
+        except Exception:
+            pass  # If quick check fails, proceed to full profiling
+
+        # Profile
+        try:
+            profile = _profile_dataset(local_path)
+            warnings = _early_warning(profile)
+            feasibility = _assess_feasibility(
+                [{"profile": profile, "dataset": candidate, "local_path": local_path, "warnings": warnings}],
+                [],
+            )
+            ceiling = feasibility["score_ceiling"]
+            tier = feasibility["max_tier"]
+
+            # Boost ceiling for RCTs/experiments (identification is built-in)
+            method_lower = candidate.get("method", "").lower()
+            design_tier = candidate.get("design_tier", 9)
+            if design_tier == 1 or any(k in method_lower for k in ["rct", "experiment", "randomiz"]):
+                ceiling = max(ceiling, 90)  # RCTs have minimum 90 ceiling
+                tier = min(tier, 1)
+            elif design_tier == 2 or any(k in method_lower for k in ["natural experiment", "stagger", "did"]):
+                ceiling = max(ceiling, 85)
+
+            print(f"       [ok] {profile['rows']:,} rows x {profile['cols']} cols | "
+                  f"Structure: {profile['structure']} | "
+                  f"Ceiling: {ceiling}/100 | Tier: {tier}"
+                  + (" [RCT BOOST]" if design_tier == 1 else ""))
+
+            # ── Data quality filter ───────────────────────────────────
+            # Reject datasets that look bad even if ceiling is high
+            quality_reject = False
+            quality_reasons = []
+
+            try:
+                import pandas as _pd_check
+
+                # Load sample for quality checks
+                ext = Path(local_path).suffix.lower()
+                if ext == ".dta":
+                    _df_q = _pd_check.read_stata(local_path)
+                elif ext == ".tab":
+                    _df_q = _pd_check.read_csv(local_path, sep="\t",
+                                                encoding="latin-1", low_memory=False)
+                elif ext == ".parquet":
+                    _df_q = _pd_check.read_parquet(local_path)
+                else:
+                    _df_q = _pd_check.read_csv(local_path, encoding="latin-1",
+                                                low_memory=False)
+
+                n_rows, n_cols = _df_q.shape
+
+                # Q1: Columns with >20% missing
+                missing_pcts = _df_q.isnull().mean()
+                high_missing_cols = (missing_pcts > 0.20).sum()
+                high_missing_pct = 100 * high_missing_cols / max(n_cols, 1)
+
+                if high_missing_pct > 20:
+                    quality_reasons.append(
+                        f"{high_missing_pct:.0f}% of columns have >20% missing data "
+                        f"(threshold: 20%)"
+                    )
+                    quality_reject = True
+
+                # Q2: No identifiable treatment variable
+                treat_keywords = ["treat", "treatment", "arm", "group", "condition",
+                                  "assigned", "randomiz", "intervent", "program"]
+                has_treat_var = any(
+                    any(kw in col.lower() for kw in treat_keywords)
+                    for col in _df_q.columns
+                )
+                if not has_treat_var:
+                    quality_reasons.append(
+                        "No variable name suggests treatment assignment"
+                    )
+                    # Warning, not rejection — treatment could have non-obvious name
+
+                # Q3: Column names are codes without meaning
+                code_pattern_cols = sum(
+                    1 for col in _df_q.columns
+                    if len(col) <= 6 and any(c.isdigit() for c in col)
+                    and not col.lower() in ("year", "age", "id", "n", "sex")
+                )
+                code_pct = 100 * code_pattern_cols / max(n_cols, 1)
+                if code_pct > 60:
+                    # Check if there's a README
+                    data_dir = Path(local_path).parent
+                    has_readme = any(
+                        (data_dir / f).exists()
+                        for f in ["README.md", "README.txt", "readme.md",
+                                  "codebook.txt", "codebook.pdf", "CODEBOOK.md"]
+                    )
+                    if not has_readme:
+                        quality_reasons.append(
+                            f"{code_pct:.0f}% of columns are coded names "
+                            f"(e.g., Q49, VAR001) with no codebook"
+                        )
+                        quality_reject = True
+
+                # Q4: Column/row ratio too high AND high missing = survey arms as columns
+                # Only reject if BOTH ratio is high AND most columns are mostly empty
+                # This avoids rejecting legitimate datasets with many baseline covariates
+                col_row_ratio = n_cols / max(n_rows, 1)
+                if col_row_ratio > 0.40 and high_missing_pct > 20:
+                    quality_reasons.append(
+                        f"Column/row ratio = {col_row_ratio:.0%} ({n_cols} cols / {n_rows} rows) "
+                        f"AND {high_missing_pct:.0f}% columns >20% missing — "
+                        f"likely survey with treatment arms encoded as columns"
+                    )
+                    quality_reject = True
+
+                # Q5: Missing data treatment plan
+                # For datasets that pass, document the missing data situation
+                if not quality_reject:
+                    avg_missing = missing_pcts.mean() * 100
+                    cols_over_20 = high_missing_cols
+                    if cols_over_20 > 0:
+                        print(f"       [missing] {cols_over_20}/{n_cols} columns "
+                              f"have >20% missing (avg: {avg_missing:.1f}%)")
+                        print(f"       [missing] Strategy: listwise deletion for "
+                              f"<5% missing outcomes; multiple imputation or "
+                              f"bounds for 5-20% missing")
+
+                # Q6: Variable usability — check that string variables have
+                # classifiable values (not corrupted encoding)
+                str_cols = _df_q.select_dtypes(include=["object"]).columns
+                n_corrupted_cols = 0
+                for sc in str_cols[:20]:  # check first 20 string columns
+                    vals = _df_q[sc].dropna()
+                    if len(vals) == 0:
+                        continue
+                    # Check if majority of values are replacement characters (U+FFFD)
+                    try:
+                        sample = vals.astype(str).head(100)
+                        n_replacement = sample.str.contains('\ufffd', na=False).sum()
+                        if n_replacement > len(sample) * 0.5:
+                            n_corrupted_cols += 1
+                    except Exception:
+                        pass
+
+                if n_corrupted_cols > 0:
+                    quality_reasons.append(
+                        f"{n_corrupted_cols} string columns have >50% corrupted encoding "
+                        f"(replacement characters). Key variables may be unreadable."
+                    )
+                    print(f"       [warn] {n_corrupted_cols} columns with corrupted encoding")
+
+                # Q7: Treatment variable detectability — check if any column
+                # looks like a treatment assignment with enough classifiable values
+                treatment_candidates = [c for c in _df_q.columns
+                                       if any(kw in c.lower() for kw in
+                                              ["treat", "assign", "group", "arm",
+                                               "condition", "interv", "random",
+                                               "control", "placebo"])]
+                if not treatment_candidates:
+                    # No obvious treatment column — check if there's a binary/few-valued
+                    # column with balanced groups (potential treatment)
+                    for c in _df_q.select_dtypes(include=["number"]).columns:
+                        nuniq = _df_q[c].nunique()
+                        if 2 <= nuniq <= 5:
+                            val_counts = _df_q[c].value_counts()
+                            min_pct = val_counts.min() / val_counts.sum()
+                            if min_pct >= 0.15:  # at least 15% in smallest group
+                                treatment_candidates.append(c)
+                                break
+
+                if not treatment_candidates:
+                    quality_reasons.append(
+                        "No variable name suggests treatment assignment"
+                    )
+
+                # Q8: Effective N — if treatment column found, check usable N
+                effective_n = n_rows
+                if treatment_candidates:
+                    tc = treatment_candidates[0]
+                    tc_valid = _df_q[tc].dropna()
+                    # Check for encoding issues in string treatment vars
+                    if tc_valid.dtype == "object":
+                        try:
+                            n_readable = tc_valid.astype(str).apply(
+                                lambda x: not any(ord(c) == 0xFFFD for c in x)
+                            ).sum()
+                            effective_n = int(n_readable)
+                            if effective_n < n_rows * 0.5:
+                                quality_reasons.append(
+                                    f"Treatment variable '{tc}' has only "
+                                    f"{effective_n}/{n_rows} ({100*effective_n/n_rows:.0f}%) "
+                                    f"readable values — encoding corruption"
+                                )
+                                if effective_n < 100:
+                                    quality_reasons.append(
+                                        f"Effective N = {effective_n} after encoding filter "
+                                        f"(too small for reliable inference)"
+                                    )
+                                    quality_reject = True
+                        except Exception:
+                            pass
+
+                del _df_q
+
+            except Exception as q_err:
+                print(f"       [quality] Could not run quality checks: {q_err}")
+
+            if quality_reject:
+                print(f"       [REJECT] Data quality too low:")
+                for reason in quality_reasons:
+                    print(f"         - {reason}")
+                continue  # skip this dataset
+
+            if quality_reasons and not quality_reject:
+                print(f"       [warn] Quality concerns:")
+                for reason in quality_reasons:
+                    print(f"         - {reason}")
+
+            if ceiling >= 85:
+                qualified.append({
+                    "candidate": candidate,
+                    "local_path": local_path,
+                    "profile": profile,
+                    "feasibility": feasibility,
+                    "warnings": warnings,
+                })
+                print(f"       *** QUALIFIES (score ceiling >= 85) ***")
+
+        except Exception as e:
+            print(f"       [error] Could not profile: {e}")
+
+        # Stop early if we have 3+ qualified datasets
+        if len(qualified) >= 3:
+            print(f"\n  [ok] Found {len(qualified)} qualifying datasets, stopping search")
+            break
+
+    # ── Phase 3: If no qualified datasets, let user provide ───────────
+    if not qualified:
+        print(f"\n  No datasets with score ceiling >= 85 found automatically.")
+        print(f"  You can provide a dataset path, or try Path A with a specific topic.\n")
+        print("\a", end="", flush=True)
+        while True:
+            choice = input("  Enter dataset path (or 'quit' to exit): ").strip().strip('"')
+            if choice.lower() == "quit":
+                import sys
+                sys.exit(0)
+            elif choice and Path(choice).exists():
+                try:
+                    profile = _profile_dataset(choice)
+                    warnings = _early_warning(profile)
+                    feasibility = _assess_feasibility(
+                        [{"profile": profile, "dataset": {"name": Path(choice).name},
+                          "local_path": choice, "warnings": warnings}],
+                        [],
+                    )
+                    qualified.append({
+                        "candidate": {"name": Path(choice).name, "url": "user-provided"},
+                        "local_path": choice,
+                        "profile": profile,
+                        "feasibility": feasibility,
+                        "warnings": warnings,
+                    })
+                    print(f"  [ok] Profiled: {profile['rows']:,} rows x {profile['cols']} cols "
+                          f"(ceiling: {feasibility['score_ceiling']})")
+                    break
+                except Exception as e:
+                    print(f"  [error] {e}")
+            else:
+                print(f"  File not found: {choice}")
+
+    # ── Phase 4: Show qualifying datasets and suggest topics ──────────
+    print(f"\n  {'=' * 60}")
+    print(f"  QUALIFYING DATASETS (score ceiling >= 85)")
+    print(f"  {'=' * 60}")
+
+    for i, q in enumerate(qualified, 1):
+        f = q["feasibility"]
+        p = q["profile"]
+        print(f"\n  [{i}] {q['candidate'].get('name', '?')[:70]}")
+        print(f"      File:      {Path(q['local_path']).name}")
+        print(f"      Rows:      {p['rows']:,}")
+        print(f"      Columns:   {p['cols']}")
+        print(f"      Structure: {p['structure']}")
+        print(f"      Ceiling:   {f['score_ceiling']}/100")
+        print(f"      Max tier:  {f['max_tier']} ({f['tier_label']})")
+        print(f"      Methods:   {', '.join(f['allowed_methods'][:5])}")
+        if p.get("columns"):
+            vars_preview = ", ".join(p["columns"][:15])
+            print(f"      Variables: {vars_preview}")
+            if len(p["columns"]) > 15:
+                print(f"                 ... ({p['cols']} total)")
+
+    # ── Phase 5: Ask Claude to suggest topics ─────────────────────────
+    print(f"\n  [topics] Generating research topic suggestions...")
+
+    # Build data summary for Claude
+    data_summaries = []
+    for i, q in enumerate(qualified, 1):
+        p = q["profile"]
+        f = q["feasibility"]
+        cols = ", ".join(p.get("columns", [])[:30])
+        data_summaries.append(
+            f"Dataset {i}: {q['candidate'].get('name', '?')}\n"
+            f"  Rows: {p['rows']:,}, Cols: {p['cols']}\n"
+            f"  Structure: {p['structure']}\n"
+            f"  Max tier: {f['max_tier']} ({f['tier_label']})\n"
+            f"  Allowed methods: {', '.join(f['allowed_methods'])}\n"
+            f"  Variables: {cols}\n"
+            f"  Data summary: {p.get('data_summary', 'N/A')[:500]}\n"
+        )
+
+    topic_prompt = f"""You are a research advisor specializing in CAUSAL IDENTIFICATION.
+Below are datasets that have been downloaded and profiled.
+
+YOUR #1 PRIORITY: Find the EXOGENOUS VARIATION in each dataset.
+Before suggesting any topic, ask: "What in this data creates a situation where
+some units are treated and others are not, for reasons outside their control?"
+
+IDENTIFICATION-FIRST APPROACH:
+1. Look at the variables. Is there a POLICY CHANGE that affected some units first?
+   (staggered rollout, regional reform, age threshold, income cutoff)
+2. Is there a GEOGRAPHIC BOUNDARY that creates a discontinuity?
+   (state borders, district lines, distance to something)
+3. Is there a THRESHOLD that creates a sharp cutoff?
+   (eligibility criteria, test scores, age limits, income limits)
+4. Is there a NATURAL EXPERIMENT embedded in the data?
+   (weather shock, unexpected policy, legal change, natural disaster)
+5. Is there CROSS-SECTIONAL VARIATION in treatment intensity?
+   (some regions more exposed than others for pre-determined reasons)
+
+If you CANNOT find exogenous variation in a dataset, say so explicitly.
+Do NOT propose a before-after design with universal treatment — these always
+score below 80 and are rejected by referees.
+
+DATASETS:
+{"".join(data_summaries)}
+
+For each dataset, suggest 2 specific research topics. Each MUST have:
+- A source of exogenous variation that creates a credible comparison group
+- Identification level A (control group) or B (dose variation) — NEVER level C
+- A method that is compatible with the data structure
+
+Return a JSON block:
+```json
+{{
+  "suggestions": [
+    {{
+      "dataset_index": 1,
+      "topic": "Short topic name",
+      "research_question": "...",
+      "method": "DiD with staggered adoption",
+      "identification_level": "A",
+      "identification": "Policy X was adopted by states at different times (2010-2015), creating staggered treatment variation",
+      "control_group": "States that adopted later serve as controls for early adopters",
+      "score_potential": "Level A identification + panel data + 5 pre-treatment years = 90+ potential"
+    }}
+  ]
+}}
+```
+"""
+    p_profile = get_profile("stage1")
+    topic_response = run_claude(
+        topic_prompt,
+        model=p_profile["model"], effort=p_profile["effort"],
+        allowed_tools=[],
+        timeout=120,
+        label="topic-suggestion",
+    )
+    suggestions = extract_json(topic_response)
+    topic_list = suggestions.get("suggestions", []) if suggestions else []
+
+    if topic_list:
+        print(f"\n  {'=' * 60}")
+        print(f"  SUGGESTED RESEARCH TOPICS")
+        print(f"  {'=' * 60}")
+        for i, s in enumerate(topic_list, 1):
+            ds_idx = s.get("dataset_index", 1)
+            ds_name = qualified[ds_idx - 1]["candidate"].get("name", "?")[:40] if ds_idx <= len(qualified) else "?"
+            id_level = s.get("identification_level", "?")
+            print(f"\n  [{i}] {s.get('topic', '?')}")
+            print(f"      Dataset:  {ds_name}")
+            print(f"      RQ:       {s.get('research_question', '?')}")
+            print(f"      Method:   {s.get('method', '?')}  [ID Level: {id_level}]")
+            print(f"      ID:       {s.get('identification', '?')[:120]}")
+            control = s.get("control_group", "")
+            if control:
+                print(f"      Control:  {control[:120]}")
+            print(f"      Score:    {s.get('score_potential', '?')[:120]}")
+    else:
+        print("  [warn] Could not generate topic suggestions")
+
+    # ── Phase 6: User selects ─────────────────────────────────────────
+    print(f"\n  {'=' * 60}")
+    print(f"  Select a topic by number, or enter your own topic.")
+    print(f"  {'=' * 60}")
+    print("\a", end="", flush=True)
+
+    selected_topic = None
+    selected_dataset_idx = 0
+
+    while True:
+        choice = input("\n  >> ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(topic_list):
+            sel = topic_list[int(choice) - 1]
+            selected_topic = sel.get("topic", "research")
+            selected_dataset_idx = sel.get("dataset_index", 1) - 1
+            print(f"  [ok] Selected: {selected_topic}")
+            break
+        elif choice:
+            selected_topic = choice
+            if len(qualified) > 1:
+                ds_choice = input(f"  Which dataset? [1-{len(qualified)}]: ").strip()
+                selected_dataset_idx = int(ds_choice) - 1 if ds_choice.isdigit() else 0
+            print(f"  [ok] Custom topic: {selected_topic}")
+            break
+
+    # ── Phase 7: Save state ───────────────────────────────────────────
+    selected = qualified[min(selected_dataset_idx, len(qualified) - 1)]
+    profile = selected["profile"]
+    feasibility = selected["feasibility"]
+
+    state["stages"]["stage1"] = {
+        "status": "completed",
+        "topic": selected_topic,
+        "path": "C",
+        "output_file": str(project_dir / "stage1_discovery.md"),
+        "completed_at": datetime.now().isoformat(),
+        "data_path": selected["local_path"],
+        "data_profile": {
+            "rows": profile["rows"],
+            "cols": profile["cols"],
+            "columns": profile["columns"],
+            "structure": profile["structure"],
+            "panel_flag": profile["panel_flag"],
+            "panel_details": profile.get("panel_details", {}),
+            "id_cols": profile.get("id_cols", []),
+            "time_cols": profile.get("time_cols", []),
+            "wide_panel": profile.get("wide_panel"),
+        },
+        "recommended_data_sources": [q["candidate"] for q in qualified],
+    }
+
+    # Also save Stage 1.5 as completed (data already profiled)
+    state["stages"]["stage1_5"] = {
+        "status": "completed",
+        "completed_at": datetime.now().isoformat(),
+        "n_downloaded": len(qualified),
+        "n_not_downloaded": 0,
+        "feasibility": feasibility,
+        "downloaded_datasets": [
+            {
+                "name": q["candidate"].get("name", ""),
+                "local_path": q["local_path"],
+                "warnings": q["warnings"],
+                "profile": {
+                    "rows": q["profile"]["rows"],
+                    "cols": q["profile"]["cols"],
+                    "columns": q["profile"]["columns"],
+                    "structure": q["profile"]["structure"],
+                    "panel_flag": q["profile"]["panel_flag"],
+                    "panel_details": q["profile"].get("panel_details", {}),
+                    "id_cols": q["profile"].get("id_cols", []),
+                    "time_cols": q["profile"].get("time_cols", []),
+                    "wide_panel": q["profile"].get("wide_panel"),
+                    "data_summary": q["profile"].get("data_summary", ""),
+                },
+            }
+            for q in qualified
+        ],
+    }
+
+    # Save discovery output
+    output_file = project_dir / "stage1_discovery.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(
+        json.dumps({
+            "path": "C",
+            "topic": selected_topic,
+            "qualified_datasets": len(qualified),
+            "selected_dataset": selected["candidate"].get("name", ""),
+            "feasibility": feasibility,
+            "suggestions": topic_list,
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    save_state(project_dir, state)
+
+    print(f"\n  {'=' * 60}")
+    print(f"  STAGE 1 PATH C — COMPLETE")
+    print(f"  {'=' * 60}")
+    print(f"  Topic:     {selected_topic}")
+    print(f"  Dataset:   {Path(selected['local_path']).name}")
+    print(f"  Rows:      {profile['rows']:,}")
+    print(f"  Columns:   {profile['cols']}")
+    print(f"  Structure: {profile['structure']}")
+    print(f"  Ceiling:   {feasibility['score_ceiling']}/100")
+    print(f"  Tier:      {feasibility['max_tier']} ({feasibility['tier_label']})")
+    print(f"  {'=' * 60}")
+
+    return state
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Path A topic-aware discovery (added 2026-04-10)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Replaces the old "WebSearch + 17 searchers + LLM consolidator" Path A with a
+# topic-suggestion architecture:
+#
+#   1. Expand the user's topic into 8 related variants (LLM)
+#   2. For each variant, count quality candidates from 5 replication-grade
+#      sources, applying a metadata proxy filter
+#   3. Display variants ranked by high-confidence count, auto-select winner
+#   4. Download + validate top candidates of the winning variant
+#   5. Return only datasets that pass the quality gate
+#
+# This honors the principle "all returned datasets must meet the criteria":
+# the proxy filter narrows the search; the actual download + Q1-Q8 + ceiling
+# gate validates that the returned datasets are usable for a 75+ paper.
+
+def _likely_quality(candidate: dict) -> bool:
+    """Heuristic metadata-only proxy for whether a candidate is likely to
+    pass the full Q1-Q8 + ceiling >= 75 gate.
+
+    Cannot replace the real validation (which requires downloading the file),
+    but is highly correlated with it. Used during the variant-counting phase
+    to give the user a meaningful 'high-confidence' count without paying the
+    download cost for every variant.
+    """
+    src = candidate.get("source_api", "")
+    name = (candidate.get("name") or "").lower()
+
+    # Strong positive signals: pre-validated provenance
+    if src in ("curated_registry", "journal"):
+        return True
+
+    # Dataverse: title must signal an academic replication archive
+    if src == "dataverse":
+        return any(k in name for k in [
+            "replication", "data for", "replication data", "supplementary"
+        ])
+
+    # Zenodo: must have actual data files attached (not metadata-only)
+    if src == "zenodo":
+        if candidate.get("has_data_files"):
+            return True
+        files = candidate.get("files") or []
+        return any(
+            f.lower().endswith((".csv", ".dta", ".tab", ".parquet", ".xlsx", ".zip"))
+            for f in files
+        )
+
+    # GitHub: stars + replication wording is a strong proxy for academic value
+    if src == "github":
+        if candidate.get("stars", 0) >= 10 and "replication" in name:
+            return True
+        return candidate.get("stars", 0) >= 50
+
+    return False
+
+
+def _expand_topic_variants(topic: str, n: int = 8) -> list[str]:
+    """Generate N related topic queries via Claude.
+
+    Returns the original topic plus N-1 LLM-generated variants. If the LLM
+    call fails, falls back to a hardcoded suffix expansion so Path A still
+    works without network/LLM access.
+    """
+    print(f"  [expand] Generating {n} topic variants for '{topic}'...")
+    fallback = [
+        topic,
+        f"{topic} policy reform",
+        f"{topic} natural experiment",
+        f"{topic} randomized controlled trial",
+        f"{topic} difference in differences",
+        f"{topic} regression discontinuity",
+        f"{topic} instrumental variable",
+        f"{topic} impact evaluation",
+    ][:n]
+
+    try:
+        p = get_profile("stage1")
+        prompt = (
+            f'You are an empirical economist looking for replication archives '
+            f'related to "{topic}".\n\n'
+            f'Generate {n - 1} concrete search queries an economist would use '
+            f'to find datasets supporting causal identification on this topic. '
+            f'Mix:\n'
+            f'  - Specific policy/intervention angles (e.g., "minimum wage reform")\n'
+            f'  - Methodological angles (e.g., "RCT", "natural experiment")\n'
+            f'  - Related sub-fields (e.g., "labor market frictions")\n\n'
+            f'Return ONLY a JSON array of {n - 1} short query strings (3-6 words each), '
+            f'no commentary.\n'
+            f'Example: ["minimum wage RCT", "unemployment insurance reform DiD", ...]'
+        )
+        response = run_claude(
+            prompt,
+            model=p["model"], effort="low",
+            allowed_tools=[],
+            timeout=30,
+            max_retries=1,
+            label="topic-expand",
+        )
+        parsed = extract_json(response)
+        if isinstance(parsed, list) and parsed:
+            variants = [topic] + [str(v) for v in parsed if isinstance(v, str)][: n - 1]
+            print(f"  [expand] Generated {len(variants)} variants")
+            return variants
+    except Exception as e:
+        print(f"  [expand] LLM failed ({e}), using heuristic fallback")
+    return fallback
+
+
+def _count_quality_candidates_for_variant(variant: str) -> dict:
+    """Count metadata hits across replication-grade sources for one variant.
+
+    Sources: Dataverse, Zenodo, GitHub, curated registry, journal collections.
+    Skips portal sources (data.gov, IDB, etc.) because they don't reliably
+    produce data that passes Q1-Q8.
+
+    Returns dict with:
+        variant     — the query string
+        n_total     — total metadata hits (raw count)
+        n_high_conf — hits passing the _likely_quality proxy filter
+        candidates  — full candidate list (for downstream download)
+    """
+    candidates = []
+
+    # Dataverse + Zenodo + GitHub (live searches)
+    candidates.extend(_search_dataverse(variant, max_results=8))
+    candidates.extend(_search_zenodo(variant, max_results=8))
+    candidates.extend(_search_github(variant, max_results=4))
+
+    # Curated registry: keyword overlap
+    try:
+        from ..dataset_registry import CURATED_DATASETS, search_multiple_journals
+    except Exception:
+        CURATED_DATASETS, search_multiple_journals = [], None
+
+    terms = [t.lower() for t in variant.split() if len(t) > 2]
+    for ds in CURATED_DATASETS:
+        title = (ds.get("title") or "").lower()
+        if terms and any(t in title for t in terms):
+            # Some curated entries store DOIs with the "doi:" prefix; strip it
+            # so the resulting URL is well-formed.
+            raw_doi = ds.get("dataverse_doi", "") or ""
+            clean_doi = raw_doi[4:] if raw_doi.startswith("doi:") else raw_doi
+            candidates.append({
+                "name": ds.get("title", ""),
+                "provider": f"Curated Registry ({ds.get('journal', '?')})",
+                "url": f"https://doi.org/{clean_doi}" if clean_doi else "",
+                "design_tier": ds.get("design_tier", 3),
+                "score_ceiling": ds.get("score_ceiling", 80),
+                "method": ds.get("design", ""),
+                "source_api": "curated_registry",
+            })
+
+    # Journal collections: 1 quick query
+    if search_multiple_journals is not None:
+        try:
+            jr = search_multiple_journals(
+                journal_keys=["QJE", "REStat"], query=variant, max_per_journal=2
+            )
+            for r in jr:
+                r["source_api"] = "journal"
+            candidates.extend(jr)
+        except Exception:
+            pass
+
+    n_total = len(candidates)
+    n_high = sum(1 for c in candidates if _likely_quality(c))
+    return {
+        "variant": variant,
+        "n_total": n_total,
+        "n_high_conf": n_high,
+        "candidates": candidates,
+    }
+
+
+def _rank_and_select_variant(counts: list[dict], original_topic: str) -> dict:
+    """Display variants ranked by high-confidence count and select the winner.
+
+    Auto-selection rule: pick the variant with the highest n_high_conf. If
+    multiple variants tie at 0, fall back to the original topic.
+    """
+    sorted_counts = sorted(counts, key=lambda c: c["n_high_conf"], reverse=True)
+
+    print(f"\n  TOPIC SUGGESTIONS (ranked by high-confidence quality datasets):")
+    print(f"  {'─' * 70}")
+    max_high = max((c["n_high_conf"] for c in sorted_counts), default=1) or 1
+    for i, c in enumerate(sorted_counts, 1):
+        bar_width = int(20 * c["n_high_conf"] / max_high)
+        bar = "█" * bar_width + " " * (20 - bar_width)
+        marker = " ← original" if c["variant"] == original_topic else ""
+        print(f"  {i}. [{bar}] {c['n_high_conf']:>3} hi-conf "
+              f"({c['n_total']:>3} total) — {c['variant'][:50]}{marker}")
+    print()
+
+    # Auto-select: best by high-confidence
+    best = sorted_counts[0]
+    if best["n_high_conf"] == 0:
+        # Nothing passes proxy — fall back to the variant with most total hits
+        best = sorted(counts, key=lambda c: c["n_total"], reverse=True)[0]
+        print(f"  [select] No high-confidence variants. Picking by total hits: '{best['variant']}'")
+    else:
+        print(f"  [select] Auto-selected: '{best['variant']}' "
+              f"({best['n_high_conf']} high-confidence, {best['n_total']} total)")
+    return best
+
+
+def _validate_path_a_candidates(candidates: list[dict],
+                                project_dir: Path,
+                                max_attempts: int = 8) -> list[dict]:
+    """Download top candidates and apply Q1-Q8-style validation.
+
+    Reuses the Stage 1.5 download/profile/feasibility helpers. Returns
+    qualified datasets only (those passing _MIN_ROWS, _MIN_COLS, ceiling
+    threshold, and basic missing-data check).
+    """
+    from .stage1_5_data_loading import (
+        _try_download_dataverse, _try_download_zenodo, _try_download_direct,
+    )
+
+    data_dir = project_dir / "data" / "external"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Sort: high-confidence first, then by causal-related title keywords
+    def _rank_key(c):
+        hi = 0 if _likely_quality(c) else 1
+        return (hi, -(c.get("score_ceiling", 0) or 0))
+    sorted_candidates = sorted(candidates, key=_rank_key)
+
+    qualified = []
+    attempted = 0
+    for c in sorted_candidates:
+        if attempted >= max_attempts:
+            break
+        if len(qualified) >= 3:
+            break  # We only need 3 validated datasets for Stage 2
+        attempted += 1
+
+        url = c.get("download_url") or c.get("url", "")
+        provider = (c.get("provider") or "").lower()
+        name = (c.get("name") or "Unknown")[:60]
+        if not url:
+            continue
+
+        print(f"  [{attempted}/{max_attempts}] Downloading: {name}")
+
+        # Reuse Stage 1.5 download helpers based on URL/provider
+        local_path = None
+        if "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
+            local_path = _try_download_dataverse(url, data_dir)
+        elif "zenodo" in provider or "zenodo.org" in url:
+            local_path = _try_download_zenodo(url, data_dir)
+        if not local_path:
+            local_path = _try_download_direct(url, data_dir)
+        if not local_path:
+            print(f"       [skip] Could not download")
+            continue
+
+        # Profile + minimal Q-checks
+        try:
+            profile = _profile_dataset(local_path)
+            if profile["rows"] < 200:
+                print(f"       [skip] Only {profile['rows']} rows (need >=200)")
+                continue
+            if profile["cols"] < 5:
+                print(f"       [skip] Only {profile['cols']} cols (need >=5)")
+                continue
+
+            # Quick missing-data check (simplified Q1)
+            try:
+                import pandas as _pd_chk
+                ext = Path(local_path).suffix.lower()
+                if ext == ".dta":
+                    _df = _pd_chk.read_stata(local_path)
+                elif ext == ".tab":
+                    _df = _pd_chk.read_csv(local_path, sep="\t",
+                                           encoding="latin-1", low_memory=False)
+                elif ext == ".parquet":
+                    _df = _pd_chk.read_parquet(local_path)
+                else:
+                    _df = _pd_chk.read_csv(local_path, encoding="latin-1",
+                                           low_memory=False)
+                missing_pcts = _df.isnull().mean()
+                high_missing = (missing_pcts > 0.20).sum()
+                if high_missing / max(len(_df.columns), 1) > 0.20:
+                    print(f"       [skip] {high_missing}/{len(_df.columns)} cols >20% missing")
+                    continue
+            except Exception as e:
+                print(f"       [warn] Missing-data check failed: {e}")
+
+            # Feasibility / ceiling check
+            from .stage1_5_data_loading import _assess_feasibility
+            feasibility = _assess_feasibility(
+                [{"profile": profile, "dataset": c, "local_path": local_path, "warnings": []}],
+                [],
+            )
+            ceiling = feasibility.get("score_ceiling", 0)
+            tier = feasibility.get("max_tier", 9)
+
+            # RCT / experiment boost — same logic as Path C. If the dataset
+            # title or design hint signals an RCT or natural experiment, raise
+            # the ceiling because identification is built into the design.
+            name_lower = (c.get("name") or "").lower()
+            method_lower = (c.get("method") or "").lower()
+            design_tier_hint = c.get("design_tier", 9)
+            rct_keywords = ["rct", "experiment", "randomiz", "trial"]
+            ne_keywords = ["natural experiment", "stagger", "did",
+                           "difference-in-difference", "difference in difference",
+                           "regression discontinuity", "rdd", "instrumental"]
+            if design_tier_hint == 1 or any(k in name_lower or k in method_lower
+                                            for k in rct_keywords):
+                ceiling = max(ceiling, 90)
+                tier = min(tier, 1)
+            elif design_tier_hint == 2 or any(k in name_lower or k in method_lower
+                                              for k in ne_keywords):
+                ceiling = max(ceiling, 85)
+
+            # Path A threshold: 75 (vs Path C's 85). Path A is more permissive
+            # because it filters by topic, not by broad availability — a
+            # topic-relevant 75 ceiling is preferable to a generic 85.
+            if ceiling < 75:
+                print(f"       [skip] Ceiling {ceiling}/100 < 75 threshold")
+                continue
+
+            # ── Treatment-outcome correlation check ───────────────────────
+            # Even if a dataset has a great causal design (RCT tier 1) and
+            # passes Q1-Q8, it may still produce a NULL paper if treatment
+            # has no detectable correlation with any outcome. We reject
+            # candidates where NO numeric variable shows |corr| > 0.03 with
+            # the most plausible treatment column. This prevents the
+            # pipeline from spending resources producing a paper with
+            # uniformly null effects on a topic the data does not address.
+            try:
+                import numpy as _np_corr
+                # Detect treatment column: prefer binary balanced columns
+                # whose name suggests treatment. If none found, skip the
+                # check (don't reject — corr check is a positive signal,
+                # not a hard requirement).
+                treat_keywords = ("treat", "vbt", "assign", "arm", "random",
+                                  "intervent", "voucher", "lottery")
+                treat_cols = [
+                    col for col in _df.columns
+                    if any(k in col.lower() for k in treat_keywords)
+                    and _df[col].nunique() <= 8
+                ]
+                # Prefer the first binary column with balanced groups
+                treat_col = None
+                for tc in treat_cols:
+                    s = _df[tc].dropna()
+                    if s.dtype.kind in "biufc" and 2 <= s.nunique() <= 5:
+                        vc = s.value_counts(normalize=True)
+                        if vc.min() >= 0.10:  # at least 10% in smallest group
+                            treat_col = tc
+                            break
+
+                if treat_col is not None:
+                    # Find numeric outcome candidates: high cardinality, std>0
+                    max_corr = 0.0
+                    best_outcome = None
+                    for col in _df.select_dtypes(include=[_np_corr.number]).columns:
+                        if col == treat_col:
+                            continue
+                        s = _df[col].dropna()
+                        if len(s) < 100 or s.nunique() < 5 or s.std() < 1e-8:
+                            continue
+                        try:
+                            common = _df[[treat_col, col]].dropna()
+                            if len(common) < 100:
+                                continue
+                            corr = abs(common[treat_col].corr(common[col]))
+                            if not _np_corr.isnan(corr) and corr > max_corr:
+                                max_corr = corr
+                                best_outcome = col
+                        except Exception:
+                            continue
+
+                    # Dynamic threshold: 2 SE for a correlation coefficient =
+                    # 2 / sqrt(n - 2). Floor at 0.05 to avoid trivial signals
+                    # in very large samples. Using 2 SE means we require the
+                    # max correlation to be at least nominally significant
+                    # — a real association, not noise from many comparisons.
+                    n_obs = len(_df)
+                    sample_thresh = 2.0 / max(_np_corr.sqrt(n_obs - 2), 1.0)
+                    CORR_THRESHOLD = max(0.05, float(sample_thresh))
+                    if max_corr < CORR_THRESHOLD:
+                        print(f"       [skip] Max treatment-outcome correlation "
+                              f"({max_corr:.3f}) below threshold ({CORR_THRESHOLD:.3f}, "
+                              f"n={n_obs}) — data likely produces null paper")
+                        continue
+                    else:
+                        print(f"       [corr] {treat_col} <-> {best_outcome}: "
+                              f"|r|={max_corr:.3f} (>{CORR_THRESHOLD:.3f}, n={n_obs})")
+            except Exception as _ce:
+                print(f"       [warn] Corr check failed (continuing): {_ce}")
+
+            # ── Balance-test-passing check ───────────────────────────────
+            # If the dataset is an RCT/quasi-experiment, randomization should
+            # produce balanced covariates. A severe balance failure (omnibus
+            # F-test p < 0.01) signals broken randomization or a non-random
+            # treatment assignment, which caps the identification score and
+            # makes peer reviewers immediately suspicious. We reject datasets
+            # where balance fails CATASTROPHICALLY (p < 0.001) — moderate
+            # imbalance (p in [0.001, 0.05]) is allowed because controls can
+            # absorb it. This check is skipped if no treatment column was
+            # found earlier (treat_col is None from the corr check block).
+            try:
+                if 'treat_col' in dir() and treat_col is not None:
+                    import numpy as _np_bal
+                    # Pick up to 6 numeric covariates with std>0 (excluding
+                    # treatment itself and the best_outcome to avoid
+                    # tautology). Use a simple OLS F-test for joint
+                    # significance of covariates predicting treatment.
+                    cov_candidates = []
+                    for col in _df.select_dtypes(include=[_np_bal.number]).columns:
+                        if col == treat_col or col == best_outcome:
+                            continue
+                        s = _df[col].dropna()
+                        if len(s) < 100 or s.nunique() < 3 or s.std() < 1e-8:
+                            continue
+                        cov_candidates.append(col)
+                        if len(cov_candidates) >= 6:
+                            break
+
+                    if len(cov_candidates) >= 2:
+                        bal_df = _df[[treat_col] + cov_candidates].dropna()
+                        if len(bal_df) >= 100:
+                            try:
+                                import statsmodels.api as _sm_bal
+                                X_bal = _sm_bal.add_constant(
+                                    bal_df[cov_candidates].astype(float).values
+                                )
+                                y_bal = bal_df[treat_col].astype(float).values
+                                bal_fit = _sm_bal.OLS(y_bal, X_bal).fit()
+                                f_pval = float(bal_fit.f_pvalue)
+                                BAL_THRESH = 0.001
+                                if f_pval < BAL_THRESH:
+                                    print(f"       [skip] Balance test FAILED "
+                                          f"(F-test p={f_pval:.5f} < {BAL_THRESH}) — "
+                                          f"randomization likely broken")
+                                    continue
+                                else:
+                                    print(f"       [balance] F-test p={f_pval:.3f} "
+                                          f"(>{BAL_THRESH}, balance OK)")
+                            except Exception as _be:
+                                print(f"       [warn] Balance F-test failed: {_be}")
+            except Exception as _be:
+                print(f"       [warn] Balance check failed (continuing): {_be}")
+
+            print(f"       [ok] {profile['rows']:,} rows × {profile['cols']} cols | "
+                  f"ceiling={ceiling}/100 | tier={tier}")
+            qualified.append({
+                "dataset": c,
+                "local_path": str(local_path),
+                "profile": profile,
+                "ceiling": ceiling,
+                "tier": tier,
+            })
+        except Exception as e:
+            print(f"       [error] Validation failed: {e}")
+            continue
+
+    return qualified
+
+
+def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
+    """New Path A: topic-aware discovery with quality validation.
+
+    Replaces the old WebSearch + LLM consolidator flow with:
+      1. Expand topic into 8 variants (LLM)
+      2. Count quality candidates per variant (proxy filter)
+      3. Display ranking, auto-select winner
+      4. Download + validate top candidates of the winning variant
+      5. Return only datasets that pass the quality gate
+
+    The returned `papers_data` is in the same shape that the rest of the
+    pipeline expects — `{"topic": ..., "data_sources": [...]}` — so
+    downstream stages don't need to change.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time as _time
+
+    print(f"\n{'=' * 60}")
+    print(f"STAGE 1: Discovery - Path A (topic-aware)")
+    print("=" * 60)
+    print(f"  Original topic: '{topic}'")
+
+    t0 = _time.time()
+
+    # ── Phase 1: Expand topic into variants ─────────────────────────────
+    variants = _expand_topic_variants(topic, n=8)
+    for i, v in enumerate(variants, 1):
+        print(f"    {i}. {v}")
+
+    # ── Phase 2: Count quality candidates per variant in parallel ──────
+    print(f"\n  [count] Searching 5 quality sources per variant in parallel...")
+    counts = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_count_quality_candidates_for_variant, v): v
+                   for v in variants}
+        for f in as_completed(futures):
+            try:
+                counts.append(f.result())
+            except Exception as e:
+                v = futures[f]
+                print(f"  [count] Variant '{v}' failed: {e}")
+                counts.append({"variant": v, "n_total": 0, "n_high_conf": 0,
+                               "candidates": []})
+
+    elapsed_count = _time.time() - t0
+    print(f"  [count] All variants counted ({elapsed_count:.0f}s)")
+
+    # ── Phase 3: Rank + select winner ──────────────────────────────────
+    selected = _rank_and_select_variant(counts, topic)
+
+    # ── Phase 4: Download + validate top candidates of winner ──────────
+    print(f"\n  [validate] Downloading + validating candidates of winning variant...")
+    qualified = _validate_path_a_candidates(
+        selected["candidates"], project_dir, max_attempts=8
+    )
+
+    elapsed_total = _time.time() - t0
+    print(f"\n  [done] Path A complete ({elapsed_total:.0f}s) — "
+          f"{len(qualified)} datasets passed quality gate")
+
+    if not qualified:
+        print(f"  [warn] No datasets passed Q1-Q8 + ceiling >= 75 for any variant")
+        print(f"         Topic may be too narrow. Consider:")
+        print(f"           - Broader keywords")
+        print(f"           - Running --path-c for dataset-first discovery")
+        print(f"           - Providing your own data with --data")
+
+    # ── Phase 5: Format output for downstream stages ────────────────────
+    data_sources = []
+    for q in qualified:
+        ds = q["dataset"]
+        prof = q["profile"]
+        data_sources.append({
+            "name": ds.get("name", "Unknown"),
+            "provider": ds.get("provider", "?"),
+            "url": ds.get("url", ""),
+            "local_path": q["local_path"],
+            "data_structure": prof.get("structure", "unknown"),
+            "n_rows": prof["rows"],
+            "n_cols": prof["cols"],
+            "score_ceiling": q["ceiling"],
+            "tier": q["tier"],
+            "source_api": ds.get("source_api", "?"),
+            "selected_variant": selected["variant"],
+        })
+
+    papers_data = {
+        "topic": topic,
+        "selected_variant": selected["variant"],
+        "all_variants": [
+            {"variant": c["variant"], "n_high_conf": c["n_high_conf"],
+             "n_total": c["n_total"]}
+            for c in counts
+        ],
+        "data_sources": data_sources,
+    }
+
+    output_file = project_dir / "stage1_discovery.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(
+        json.dumps(papers_data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"  [saved] {output_file}")
+
+    state["stages"]["stage1"] = {
+        "status": "completed",
+        "topic": topic,
+        "selected_variant": selected["variant"],
+        "path": "A",
+        "output_file": str(output_file),
+        "completed_at": datetime.now().isoformat(),
+        "recommended_data_sources": data_sources,
+    }
+
+    # Path A now downloads + validates in Stage 1 itself, so populate the
+    # Stage 1.5 slot too. Stage 2 prefers stage1_5.downloaded_datasets (rich
+    # profile with real variable names) over stage1.recommended_data_sources
+    # (metadata-only fallback). Without this, Stage 2 would lose access to
+    # the actual column names and structure details.
+    downloaded_for_stage_1_5 = []
+    for q in qualified:
+        ds = q["dataset"]
+        prof = q["profile"]
+        downloaded_for_stage_1_5.append({
+            "name": ds.get("name", "Unknown"),
+            "provider": ds.get("provider", "?"),
+            "url": ds.get("url", ""),
+            "local_path": q["local_path"],
+            "profile": {
+                "rows": prof.get("rows", 0),
+                "cols": prof.get("cols", 0),
+                "structure": prof.get("structure", "unknown"),
+                "id_cols": prof.get("id_cols", []),
+                "time_cols": prof.get("time_cols", []),
+                "columns": prof.get("columns", []),
+                "panel_details": prof.get("panel_details", {}),
+                "panel_flag": prof.get("panel_flag", False),
+                "data_summary": prof.get("data_summary", ""),
+                "wide_panel": prof.get("wide_panel"),
+            },
+            "score_ceiling": q["ceiling"],
+            "tier": q["tier"],
+        })
+    state["stages"]["stage1_5"] = {
+        "status": "completed",
+        "completed_at": datetime.now().isoformat(),
+        "downloaded_datasets": downloaded_for_stage_1_5,
+        "not_downloaded": [],
+        "feasibility": {
+            "score_ceiling": max(
+                (q["ceiling"] for q in qualified), default=0
+            ),
+            "max_tier": min(
+                (q["tier"] for q in qualified), default=9
+            ),
+        },
+    }
+
+    state["current_stage"] = 1
+    save_state(project_dir, state)
+
+    print(f"\n  {'=' * 60}")
+    print(f"  STAGE 1 PATH A — COMPLETE")
+    print(f"  {'=' * 60}")
+    print(f"  Original topic:    {topic}")
+    print(f"  Selected variant:  {selected['variant']}")
+    print(f"  Validated datasets: {len(data_sources)}")
+    if data_sources:
+        for i, ds in enumerate(data_sources, 1):
+            print(f"\n    [{i}] {ds['name'][:60]}")
+            print(f"        Provider:  {ds['provider']}")
+            print(f"        Structure: {ds['data_structure']}")
+            print(f"        Size:      {ds['n_rows']:,} rows × {ds['n_cols']} cols")
+            print(f"        Ceiling:   {ds['score_ceiling']}/100")
+    print(f"  {'=' * 60}")
+
+    return state
+
+
+# ── Public runner ────────────────────────────────────────────────────────────
+
+def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = None, path_c: bool = False) -> dict:
+    """Execute Stage 1 Discovery - Path A, B, or C."""
+    if path_c:
+        return _run_path_c(project_dir, state)
+
+    # Path A (no --data): topic-aware discovery with quality validation.
+    # Self-contained — handles its own output file, state save, and summary.
+    if not data_path:
+        return _run_path_a_topic_aware(project_dir, topic, state)
+
+    path = "B"
+    print(f"\n{'=' * 60}")
+    print(f"STAGE 1: Discovery - Path {path}")
+    print("=" * 60)
+
+    profile = None
+    early_warnings = []
+
+    # ── Path B: profile the user dataset first ──────────────────────────
+    if data_path:
+        print("  [data] Profiling user dataset...")
+        profile = _profile_dataset(data_path)
+        print(f"  [data] {profile['rows']} rows x {profile['cols']} cols")
+        if profile["panel_flag"]:
+            print("  [data] Panel structure detected")
+
+        early_warnings = _early_warning(profile)
+        if early_warnings:
+            print()
+            for w in early_warnings:
+                print(f"  [!] {w}")
+            print()
+            print("\a", end="", flush=True)  # Terminal bell — user input needed
+            proceed = input("  Continue despite warnings? [y/N] ").strip().lower()
+            if proceed != "y":
+                print("  [stop] Aborted by user.")
+                sys.exit(0)
+
+        # Causal design assessment — warn early about score ceiling
+        _causal_design_warning(profile)
+
+        # Build a Path B prompt with rich data context
+        cols_summary = ", ".join(profile["columns"][:30])
+        if len(profile["columns"]) > 30:
+            cols_summary += f", ... ({len(profile['columns'])} total)"
+
+        # Structure-specific method guidance
+        structure = profile["structure"]
+        if structure == "wide-panel":
+            pd_info = profile["panel_details"]
+            core_sample = ", ".join(pd_info.get("core_vars_sample", [])[:10])
+            suffixes = pd_info.get("year_suffixes", [])
+            years = pd_info.get("time_values", [])
+            unsuffixed = ", ".join(pd_info.get("unsuffixed_cols", [])[:15])
+            vars_per = pd_info.get("vars_per_period", {})
+            vars_per_str = ", ".join(f"{s}: {n} vars" for s, n in vars_per.items())
+            structure_desc = (
+                f"WIDE-FORMAT PANEL DATA — time is encoded in column name suffixes.\n"
+                f"  Year suffixes: {', '.join(suffixes)}\n"
+                f"  Corresponding years: {years}\n"
+                f"  Time periods: {pd_info.get('n_time_periods', '?')}\n"
+                f"  Variables per period: {vars_per_str}\n"
+                f"  Core variables (shared across all periods): {pd_info.get('n_core_vars', '?')}\n"
+                f"  Sample core vars: {core_sample}\n"
+                f"  Time-invariant/ID columns: {unsuffixed}\n"
+                f"\n"
+                f"  IMPORTANT: Each variable appears once per year with a suffix "
+                f"(e.g., {core_sample.split(',')[0].strip()}_{suffixes[0]}, "
+                f"{core_sample.split(',')[0].strip()}_{suffixes[-1]}).\n"
+                f"  The data MUST be reshaped from wide to long format before panel analysis.\n"
+                f"  After reshaping, each row = one individual-year observation."
+            )
+            method_guidance = (
+                "Applicable methods (after reshaping to long): DiD, event study, TWFE, "
+                "individual fixed effects, dynamic panel (Arellano-Bond), Markov transition "
+                "matrices, survival models, correlated random effects. "
+                "The script generation stage MUST include a reshape step (wide_to_long or melt) "
+                "before any econometric estimation."
+            )
+        elif structure == "panel":
+            pd_info = profile["panel_details"]
+            structure_desc = (
+                f"TRUE PANEL DATA — the same individuals are tracked over time.\n"
+                f"  ID column: {pd_info.get('id_column', '?')}\n"
+                f"  Time column: {pd_info.get('time_column', '?')}\n"
+                f"  Unique individuals: {pd_info.get('n_unique_ids', '?'):,}\n"
+                f"  Time periods: {pd_info.get('n_time_periods', '?')}\n"
+                f"  % IDs in 2+ periods: {pd_info.get('pct_ids_multiple_periods', '?')}%\n"
+                f"  Avg obs per individual: {pd_info.get('avg_obs_per_id', '?')}"
+            )
+            method_guidance = (
+                "Applicable methods: DiD, event study, TWFE, individual fixed effects, "
+                "dynamic panel (Arellano-Bond), Markov transition matrices, survival models."
+            )
+        elif structure == "pooled-cross-sections":
+            pd_info = profile["panel_details"]
+            structure_desc = (
+                f"POOLED CROSS-SECTIONS — different individuals sampled each period.\n"
+                f"  ID column: {pd_info.get('id_column', '?')} (does NOT repeat across time)\n"
+                f"  Time column: {pd_info.get('time_column', '?')}\n"
+                f"  Time periods: {pd_info.get('n_time_periods', '?')}\n"
+                f"  Time values: {pd_info.get('time_values', [])}\n"
+                f"  CRITICAL: You CANNOT track individuals over time. "
+                f"Only {pd_info.get('pct_ids_multiple_periods', 0)}% of IDs appear in 2+ periods."
+            )
+            method_guidance = (
+                "Applicable methods: DiD at GROUP level (not individual), repeated cross-section DiD, "
+                "IV, RDD, propensity score matching, Oaxaca-Blinder decomposition, "
+                "synthetic control (aggregate), cohort analysis. "
+                "NOT applicable: individual fixed effects, individual-level event study, "
+                "Markov transition matrices, survival/hazard models tracking individuals."
+            )
+        elif structure == "repeated-cross-sections":
+            pd_info = profile["panel_details"]
+            structure_desc = (
+                f"REPEATED CROSS-SECTIONS — multiple survey waves, no individual tracking.\n"
+                f"  Time column: {pd_info.get('time_column', '?')}\n"
+                f"  Time periods: {pd_info.get('n_time_periods', '?')}\n"
+                f"  No individual ID column found."
+            )
+            method_guidance = (
+                "Applicable methods: group-level DiD, repeated cross-section DiD, "
+                "IV, RDD, decompositions, cohort/pseudo-panel analysis. "
+                "NOT applicable: individual FE, individual event study, transition matrices."
+            )
+        else:
+            structure_desc = (
+                f"SINGLE CROSS-SECTION — one snapshot in time, no panel dimension."
+            )
+            method_guidance = (
+                "Applicable methods: IV, RDD, matching (PSM, CEM), "
+                "Oaxaca-Blinder decomposition, Heckman selection model, "
+                "quantile regression, LASSO for variable selection. "
+                "NOT applicable: DiD, event study, fixed effects, transition matrices."
+            )
+
+        prompt = f"""You are a research discovery assistant (Path B - user-provided data).
+
+The researcher works in: **{topic}**
+
+## Dataset Structure Analysis
+
+{structure_desc}
+
+{method_guidance}
+
+## Dataset Details
+
+- Rows: {profile['rows']:,}
+- Columns: {profile['cols']}
+- Variables: {cols_summary}
+- ID columns detected: {', '.join(profile['id_cols'][:5]) if profile['id_cols'] else 'None'}
+- Time columns detected: {', '.join(profile['time_cols'][:5]) if profile['time_cols'] else 'None'}
+
+## Data Sample
+
+{profile.get('data_summary', profile.get('sample_rows', 'N/A'))}
+
+## CRITICAL RULES
+
+1. You MUST respect the data structure classification above. If the data is
+   "pooled cross-sections" or "cross-sectional", do NOT suggest methods that
+   require tracking the same individual over time (panel FE, Markov transitions,
+   individual event study, survival models).
+2. Only suggest methods that are IMPLEMENTABLE with the actual variables present.
+3. If the data has a time dimension but is NOT panel, you can use group-level
+   variation over time (e.g., regional DiD, cohort DiD) but NOT individual-level.
+
+## TASK
+
+Based on the dataset structure above, summarize the key characteristics and
+recommend the most promising causal methods for this data.
+
+Output a JSON block:
+```json
+{{
+  "topic": "{topic}",
+  "data_profile": {{
+    "rows": {profile['rows']},
+    "cols": {profile['cols']},
+    "structure": "{structure}",
+    "panel": {str(profile['panel_flag']).lower()},
+    "id_cols": {profile['id_cols'][:5]},
+    "time_cols": {profile['time_cols'][:5]},
+    "warnings": {early_warnings},
+    "recommended_methods": ["method1", "method2", "method3"]
+  }}
+}}
+```
+"""
+
+    # ── Path A is handled above by _run_path_a_topic_aware() ────────────
+    # The legacy multi-agent search + LLM consolidator code below is kept
+    # in place but unreachable (the early-return at the top of run()
+    # handles Path A). It is preserved for reference and in case we want
+    # to revive specific subagents (e.g. WebSearch) as opt-in features.
+    if False:  # legacy Path A — unreachable
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time as _time
+
+        print(f"\n  [search] Launching 3 parallel searches...")
+        t0 = _time.time()
+
+        # ── Subagent 1: Claude web search (identification-first) ──────
+        web_prompt = (
+            f'You are searching for datasets to study "{topic}" with CAUSAL identification.\n'
+            f'\n'
+            f'IDENTIFICATION-FIRST APPROACH: Do NOT just search for data about {topic}.\n'
+            f'Instead, search for NATURAL EXPERIMENTS related to {topic}:\n'
+            f'  1. Policy reforms that were adopted at different times in different regions\n'
+            f'     (staggered rollout = DiD with clean control group)\n'
+            f'  2. Eligibility thresholds or cutoffs (age, income, score = RDD)\n'
+            f'  3. Bans, restrictions, or access limitations that varied by jurisdiction\n'
+            f'  4. Exogenous shocks that affected some units more than others\n'
+            f'  5. Replication packages from TOP JOURNAL papers that used causal designs\n'
+            f'     on topics related to "{topic}"\n'
+            f'\n'
+            f'Search: government microdata portals (IPUMS, DHS, LSMS, EU-SILC, CFPS),\n'
+            f'international orgs (World Bank, OECD, UNESCO, ILO), Harvard Dataverse,\n'
+            f'or any national statistics office worldwide.\n'
+            f'Prefer panel data with staggered treatment or discontinuities.\n'
+            f'Do NOT default to any specific country.\n'
+            f'\n'
+            f'CRITICAL: If the topic involves a UNIVERSAL SHOCK (e.g., a global product\n'
+            f'launch, a pandemic), search for data where ACCESS or EXPOSURE varied across\n'
+            f'units (country bans, regional restrictions, infrastructure differences).\n'
+            f'A dataset with treatment variation is worth 10x a dataset without it.\n'
+            f'\n'
+            f'Return ONLY a JSON object:\n'
+            f'{{"name": "...", "provider": "...", "url": "https://...",'
+            f' "data_structure": "panel|cross-section|repeated-cross-sections",'
+            f' "time_span": "...", "n_years": 0,'
+            f' "natural_experiment": "SPECIFIC description of what creates treatment variation",'
+            f' "control_group": "WHO is untreated and WHY",'
+            f' "causal_methods_enabled": ["DiD"], "causal_score": 0,'
+            f' "format": ".csv", "access": "free_direct|free_registration|restricted",'
+            f' "files_needed": ["file.csv"], "limitations": "..."}}'
+        )
+        p = get_profile("stage1")
+
+        # Run all sources in parallel: Claude web search + Dataverse + Zenodo + GitHub
+        # + DBnomics (macro meta-aggregator) + data.gov + World Bank + IDB
+        # + EU Open Data + data.gov.uk + data.gouv.fr
+        # + national CKAN portals: data.gov.au, open.canada.ca, datos.gob.mx,
+        #   govdata.de, dati.gov.it
+        # + Socrata federated catalog (~30 US city/state portals)
+        # + FAOSTAT bulk catalog (agriculture / food / environment panels)
+        api_results = {
+            "dataverse": [], "zenodo": [], "github": [],
+            "dbnomics": [], "datagov": [], "worldbank": [], "idb": [],
+            "eu_opendata": [], "data_gov_uk": [], "data_gouv_fr": [],
+            "data_gov_au": [], "open_canada": [], "datos_gob_mx": [],
+            "govdata_de": [], "dati_gov_it": [],
+            "socrata": [], "faostat": [],
+        }
+        web_result = ""
+
+        def _run_web_search():
+            return run_claude(
+                web_prompt,
+                model=p["model"], effort=p["effort"],
+                allowed_tools=["WebSearch", "WebFetch"],
+                timeout=120,
+                max_retries=1,
+                label="web-search",
+            )
+
+        def _run_api_searches():
+            # Search both the topic directly AND natural experiment variants
+            api_results["dataverse"] = _search_dataverse(topic)
+            api_results["dataverse"] += _search_dataverse(f"{topic} replication natural experiment")
+            api_results["zenodo"] = _search_zenodo(topic)
+            api_results["zenodo"] += _search_zenodo(f"{topic} policy reform panel")
+            api_results["github"] = _search_github(topic)
+            # New sources (added 2026-04-10): cover macro time series, US admin
+            # data, World Bank country panels, and Latin American impact evals.
+            api_results["dbnomics"] = _search_dbnomics(topic)
+            api_results["datagov"] = _search_datagov(topic)
+            api_results["worldbank"] = _search_worldbank(topic)
+            api_results["idb"] = _search_idb(topic)
+            # Pan-European + UK + France open-data portals
+            api_results["eu_opendata"] = _search_eu_opendata(topic)
+            api_results["data_gov_uk"] = _search_data_gov_uk(topic)
+            api_results["data_gouv_fr"] = _search_data_gouv_fr(topic)
+            # National CKAN portals (one helper, five wrappers)
+            api_results["data_gov_au"]  = _search_data_gov_au(topic)
+            api_results["open_canada"]  = _search_open_canada(topic)
+            api_results["datos_gob_mx"] = _search_datos_gob_mx(topic)
+            api_results["govdata_de"]   = _search_govdata_de(topic)
+            api_results["dati_gov_it"]  = _search_dati_gov_it(topic)
+            # Phase 2: Socrata federated (~30 US portals) + FAOSTAT bulk catalog
+            api_results["socrata"] = _search_socrata(topic)
+            api_results["faostat"] = _search_faostat(topic)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_web = pool.submit(_run_web_search)
+            future_api = pool.submit(_run_api_searches)
+
+            for future in as_completed([future_web, future_api]):
+                try:
+                    result = future.result()
+                    if future == future_web:
+                        web_result = result
+                except Exception as e:
+                    if future == future_web:
+                        print(f"  [web-search] Timed out or failed — continuing with API results only")
+                    else:
+                        print(f"  [error] API search failed: {e}")
+
+        elapsed = _time.time() - t0
+        print(f"  [search] All searches done ({elapsed:.0f}s)")
+
+        # ── Collect raw results from all sources ──────────────────────
+        raw_web = []
+        parsed = extract_json(web_result) if web_result else None
+        if parsed:
+            if isinstance(parsed, dict) and "name" in parsed:
+                raw_web.append(parsed)
+            elif isinstance(parsed, dict) and "data_sources" in parsed:
+                raw_web.extend(parsed["data_sources"])
+            elif isinstance(parsed, list):
+                raw_web.extend(parsed)
+
+        n_dv = len(api_results["dataverse"])
+        n_zn = len(api_results["zenodo"])
+        n_gh = len(api_results["github"])
+        n_db = len(api_results["dbnomics"])
+        n_dg = len(api_results["datagov"])
+        n_wb = len(api_results["worldbank"])
+        n_idb = len(api_results["idb"])
+        n_eu = len(api_results["eu_opendata"])
+        n_uk = len(api_results["data_gov_uk"])
+        n_fr = len(api_results["data_gouv_fr"])
+        n_au = len(api_results["data_gov_au"])
+        n_ca = len(api_results["open_canada"])
+        n_mx = len(api_results["datos_gob_mx"])
+        n_de = len(api_results["govdata_de"])
+        n_it = len(api_results["dati_gov_it"])
+        n_soc = len(api_results["socrata"])
+        n_fao = len(api_results["faostat"])
+        n_web = len(raw_web)
+        print(
+            f"  [search] Results: web={n_web}, dataverse={n_dv}, zenodo={n_zn}, "
+            f"github={n_gh}, dbnomics={n_db}, datagov={n_dg}, worldbank={n_wb}, "
+            f"idb={n_idb}, eu={n_eu}, uk={n_uk}, fr={n_fr}, "
+            f"au={n_au}, ca={n_ca}, mx={n_mx}, de={n_de}, it={n_it}, "
+            f"socrata={n_soc}, faostat={n_fao}"
+        )
+
+        # ── External curated datasets (Group B: high-value but restricted access)
+        # These are offered to the consolidator alongside search results so it can
+        # recommend them when relevant, even though they require manual acquisition.
+        try:
+            from ..dataset_registry import get_external_datasets
+            external_curated = get_external_datasets(topic=topic, max_results=10)
+        except Exception as e:
+            print(f"  [external] Could not load external registry: {e}")
+            external_curated = []
+        if external_curated:
+            print(f"  [external] {len(external_curated)} curated external sources matched topic")
+
+        # ── Subagent 4: Consolidator — evaluate and rank ──────────────
+        all_candidates = json.dumps({
+            "web_search_results": raw_web,
+            "dataverse_results": api_results["dataverse"],
+            "zenodo_results": api_results["zenodo"],
+            "github_results": api_results["github"],
+            "dbnomics_results": api_results["dbnomics"],
+            "datagov_results": api_results["datagov"],
+            "worldbank_results": api_results["worldbank"],
+            "idb_results": api_results["idb"],
+            "eu_opendata_results": api_results["eu_opendata"],
+            "data_gov_uk_results": api_results["data_gov_uk"],
+            "data_gouv_fr_results": api_results["data_gouv_fr"],
+            "data_gov_au_results": api_results["data_gov_au"],
+            "open_canada_results": api_results["open_canada"],
+            "datos_gob_mx_results": api_results["datos_gob_mx"],
+            "govdata_de_results": api_results["govdata_de"],
+            "dati_gov_it_results": api_results["dati_gov_it"],
+            "socrata_results": api_results["socrata"],
+            "faostat_results": api_results["faostat"],
+            "external_curated_restricted": external_curated,
+        }, indent=2, ensure_ascii=False)
+
+        consolidator_prompt = f"""You are a dataset evaluator for causal empirical research.
+Your #1 job: find datasets where TREATMENT VARIES ACROSS UNITS.
+
+TOPIC: "{topic}"
+
+Below are candidate datasets found from multiple sources. Select the TOP 3 datasets
+that can produce a paper scoring 85+/100. The binding constraint is ALWAYS identification
+— a dataset with treatment variation beats a bigger/cleaner dataset without it.
+
+EVALUATION CRITERIA (RANKED BY IMPORTANCE):
+
+1. EXOGENOUS VARIATION (most important — 50% of evaluation):
+   Does the data contain a situation where some units are treated and others are not?
+   - BEST: Staggered policy rollout (different regions treated at different times)
+   - GOOD: Eligibility threshold creating a discontinuity (RDD)
+   - OK: Universal treatment but intensity varies cross-sectionally (dose-response)
+   - WEAK: Universal simultaneous treatment (before-after only = Level C)
+
+   *** A dataset with clear treatment variation but only 5,000 obs is BETTER than
+   a dataset with 500,000 obs but no treatment variation. ***
+
+2. DATA STRUCTURE:
+   - Panel data (same units tracked over time) >> repeated cross-sections >> cross-section
+   - Pre-treatment periods: at least 3 years before treatment for credible pre-trends
+
+3. STATISTICAL POWER:
+   - Enough clusters for cluster-robust inference (30+ clusters)
+   - Treatment/control groups large enough to detect meaningful effects
+
+4. DATA QUALITY & ACCESS:
+   - Publicly accessible, well-documented
+   - Low attrition, consistent variable definitions
+
+CAUSAL SCORE (1-5):
+  5 = Staggered treatment + panel + 3+ pre-years + clear control group + accessible
+  4 = Cross-sectional treatment variation + panel + plausible ID
+  3 = Dose variation (continuous treatment) + panel + some pre-periods
+  2 = Panel but universal treatment, or cross-section with strong IV/RDD
+  1 = Universal simultaneous treatment with no control group
+
+*** REJECT any dataset that can only support Level C identification (causal_score=1)
+unless no better option exists. ***
+
+CANDIDATE DATASETS:
+{all_candidates}
+
+Select the TOP 3 and return ONLY a JSON block:
+```json
+{{
+  "topic": "{topic}",
+  "data_sources": [
+    {{
+      "name": "Full dataset name",
+      "provider": "Organization",
+      "url": "https://...",
+      "data_structure": "panel",
+      "time_span": "2010-2024",
+      "n_years": 15,
+      "natural_experiment": "Description of exogenous variation",
+      "causal_methods_enabled": ["DiD", "event study", "TWFE"],
+      "causal_score": 4,
+      "format": ".csv",
+      "access": "free_direct",
+      "files_needed": ["file1.csv"],
+      "limitations": "Brief limitation"
+    }}
+  ]
+}}
+```
+"""
+        print(f"\n  [consolidator] Evaluating and ranking datasets...")
+        consolidator_response = run_claude(
+            consolidator_prompt,
+            model=p["model"], effort=p["effort"],
+            allowed_tools=[],
+            timeout=120,
+            label="consolidator",
+        )
+        papers_data = extract_json(consolidator_response)
+        if not papers_data:
+            # Fallback: use web search results directly
+            papers_data = {"topic": topic, "data_sources": raw_web}
+
+    output_file = project_dir / "stage1_discovery.md"
+
+    if data_path:
+        # Path B: single call with haiku, no web search
+        p_b = get_profile("stage1_b")
+        response = run_claude(
+            prompt,
+            model=p_b["model"], effort=p_b["effort"],
+            allowed_tools=[],
+            output_file=output_file,
+        )
+        papers_data = extract_json(response)
+    else:
+        # Path A: save consolidated results to output file
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(
+            json.dumps(papers_data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"  [saved] {output_file}")
+
+    state["stages"]["stage1"] = {
+        "status": "completed",
+        "topic": topic,
+        "path": path,
+        "output_file": str(output_file),
+        "completed_at": datetime.now().isoformat(),
+    }
+
+    if data_path:
+        state["stages"]["stage1"]["data_path"] = data_path
+    if profile:
+        state["stages"]["stage1"]["data_profile"] = {
+            "rows": profile["rows"],
+            "cols": profile["cols"],
+            "columns": profile["columns"],
+            "structure": profile["structure"],
+            "panel_flag": profile["panel_flag"],
+            "panel_details": profile.get("panel_details", {}),
+            "id_cols": profile.get("id_cols", []),
+            "time_cols": profile.get("time_cols", []),
+            "wide_panel": profile.get("wide_panel"),
+            "warnings": early_warnings,
+        }
+
+    # Save recommended data sources (Path A)
+    if papers_data and "data_sources" in papers_data:
+        state["stages"]["stage1"]["recommended_data_sources"] = papers_data["data_sources"]
+        n_sources = len(papers_data["data_sources"])
+        best_score = max((ds.get("causal_score", 0) for ds in papers_data["data_sources"]), default=0)
+        print(f"  [ok] Found {n_sources} data sources (best causal score: {best_score}/5)")
+
+    if not papers_data:
+        print("  [warn] Could not parse structured JSON. Check stage1_discovery.md manually.")
+
+    # ── Final summary: show user what data is available ────────────────
+    print(f"\n  {'=' * 60}")
+    print(f"  STAGE 1 DISCOVERY — SUMMARY")
+    print(f"  {'=' * 60}")
+    print(f"  Topic: {topic}")
+    print(f"  Path:  {'B (user data)' if path == 'B' else 'A (dataset search)'}")
+
+    if profile:
+        print(f"\n  DATA LOADED:")
+        print(f"    File:      {Path(data_path).name}")
+        print(f"    Location:  {data_path}")
+        print(f"    Rows:      {profile['rows']:,}")
+        print(f"    Columns:   {profile['cols']}")
+        print(f"    Structure: {profile['structure']}")
+        if profile.get("id_cols"):
+            print(f"    ID cols:   {', '.join(profile['id_cols'][:5])}")
+        if profile.get("time_cols"):
+            print(f"    Time cols: {', '.join(profile['time_cols'][:5])}")
+        if early_warnings:
+            print(f"\n  WARNINGS:")
+            for w in early_warnings:
+                print(f"    - {w}")
+    elif papers_data and papers_data.get("data_sources"):
+        sources = papers_data["data_sources"]
+        sources.sort(key=lambda x: x.get("causal_score", 0), reverse=True)
+        print(f"\n  RECOMMENDED DATASETS ({len(sources)} found):")
+        for i, ds in enumerate(sources[:3], 1):
+            print(f"\n    [{i}] {ds.get('name', '?')}")
+            print(f"        URL:       {ds.get('url', 'N/A')}")
+            fmt = ds.get("format", "N/A")
+            files = ds.get("files_needed", [])
+            if files:
+                print(f"        Files:     {', '.join(files[:3])}")
+                if len(files) > 3:
+                    print(f"                   ... ({len(files)} total)")
+            elif fmt:
+                print(f"        Format:    {fmt}")
+            print(f"        Structure: {ds.get('data_structure', 'N/A')}")
+            print(f"        Time span: {ds.get('time_span', 'N/A')}")
+            score = ds.get("causal_score", 0)
+            print(f"        Causal:    {'*' * score}{'.' * (5 - score)} ({score}/5)")
+            access = ds.get("access", "unknown")
+            print(f"        Access:    {access}")
+        print(f"\n  To use a dataset, re-run with:")
+        print(f"  python run_pipeline.py --topic \"{topic}\" --data \"path/to/data.csv\"")
+    else:
+        print(f"\n  No structured data found. Check stage1_discovery.md for details.")
+
+    print(f"  {'=' * 60}")
+
+    state["current_stage"] = 1
+    save_state(project_dir, state)
+    return state
