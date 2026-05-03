@@ -1,5 +1,13 @@
 # Papers-HQ — Automated Academic Paper Production Pipeline
 
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/jnichor/Top_papers_creator)](https://github.com/jnichor/Top_papers_creator/commits/main)
+[![Stars](https://img.shields.io/github/stars/jnichor/Top_papers_creator?style=social)](https://github.com/jnichor/Top_papers_creator/stargazers)
+[![Issues](https://img.shields.io/github/issues/jnichor/Top_papers_creator)](https://github.com/jnichor/Top_papers_creator/issues)
+[![Powered by Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-D97757)](https://claude.ai/code)
+[![Runs on Antigravity](https://img.shields.io/badge/Runs%20on-Google%20Antigravity-4285F4)](https://antigravity.google/)
+
 A hybrid AI–human research pipeline that takes you from a research idea to a submission-ready paper. Claude handles reasoning (ideation, validation, writing, review); Python handles execution (data loading, code generation, statistics, LaTeX compilation). State is persisted between stages so you can stop, resume, or rerun any stage at will.
 
 The pipeline is built on top of the [Claude Code](https://claude.ai/code) CLI and integrates two community skills from [Claes Bäckman](https://claesbackman.com): [`review-paper`](Skills/review-paper.md) (Stage 6 peer review) and [`review-paper-code`](Skills/review-paper-code.md) (Stage 4.7 code review).
