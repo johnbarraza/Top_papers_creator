@@ -93,24 +93,26 @@
   <div class="subtitle">Pipeline Completo para la Producción<br>Automatizada de Papers Académicos</div>
 
   <div class="pipeline-visual">
-    <div class="stage"><span class="num" style="background:#3B82F6">1</span> <strong>Discovery</strong> — Repos + papers (A) o datos del usuario + papers (B)</div>
+    <div class="stage"><span class="num" style="background:#3B82F6">1</span> <strong>Discovery</strong> — Repos + papers (A), datos del usuario + papers (B), o data-first (C)</div>
+    <div class="stage"><span class="num" style="background:#06B6D4">1.5</span> <strong>Data Loading</strong> — Descarga y profiling de datasets candidatos (Path A)</div>
     <div class="stage"><span class="num" style="background:#F59E0B">2</span> <strong>Ideation</strong> — Generación y ranking de ideas de investigación</div>
     <div class="stage"><span class="num" style="background:#DC2626">2.5</span> <strong>Idea Selection</strong> — El usuario elige qué idea desarrollar</div>
+    <div class="stage"><span class="num" style="background:#14B8A6">3.3</span> <strong>Quick Empirical Test</strong> — Verifica identificación en datos reales</div>
     <div class="stage"><span class="num" style="background:#A855F7">3</span> <strong>Validation</strong> — Evaluación rigurosa de la idea (score &ge; 7)</div>
-    <div class="stage"><span class="num" style="background:#14B8A6">3.3</span> <strong>Quick Empirical Test</strong> — Verifica identificación en datos reales (NUEVO)</div>
     <div class="stage"><span class="num" style="background:#DC2626">3.5</span> <strong>Strategy Review</strong> — Aprobación humana de la estrategia</div>
     <div class="stage"><span class="num" style="background:#14B8A6">3.7</span> <strong>Referee Preview</strong> — Checklist de requisitos + assumption audit</div>
     <div class="stage"><span class="num" style="background:#0EA5E9">4</span> <strong>Strategy &amp; Code</strong> — Intervención manual (Claude en conversación)</div>
     <div class="stage"><span class="num" style="background:#4F46E5">4.5</span> <strong>Data Audit</strong> — Sanity checks automáticos sobre datos limpios</div>
+    <div class="stage"><span class="num" style="background:#6366F1">4.7</span> <strong>Code Review</strong> — review-paper-code skill + corrección automática (max 3 rondas)</div>
     <div class="stage"><span class="num" style="background:#22C55E">5</span> <strong>Writing</strong> — Redacción del paper (Claude en conversación)</div>
-    <div class="stage"><span class="num" style="background:#F59E0B">6</span> <strong>Peer Review</strong> — Revisión por pares simulada (umbrales determinísticos)</div>
+    <div class="stage"><span class="num" style="background:#F59E0B">6</span> <strong>Peer Review</strong> — Revisión por pares simulada (6 agentes en paralelo)</div>
     <div class="stage"><span class="num" style="background:#8B5CF6">7</span> <strong>Submission</strong> — Paquete de envío a journal</div>
   </div>
 
   <div class="meta">
     Documento técnico — Pipeline de investigación automatizada<br>
-    Análisis exclusivamente en Python &bull; 12 stages totales<br>
-    Última actualización: Abril 2026
+    Análisis exclusivamente en Python &bull; 14 stages totales<br>
+    Última actualización: Mayo 2026
   </div>
 </div>
 
@@ -159,32 +161,36 @@
 
   <h3>Flujo completo</h3>
   <div class="info-box" style="font-family: 'Cascadia Code', monospace; font-size: 9px; line-height: 1.7;">
-    --topic "Economics" [+ --data] o --path-c &rarr; <strong>Stage 1</strong> (Discovery: Path A, B, o C) &rarr; dataset + profile &rarr;<br>
+    --topic "Economics" [+ --data] o --path-c &rarr; <strong>Stage 1</strong> (Discovery: Path A, B, o C) &rarr;<br>
+    <strong>Stage 1.5</strong> (Data Loading: descarga y profiling, solo Path A) &rarr; datasets perfilados &rarr;<br>
     <strong>Stage 2</strong> (Ideation) &rarr; Top 3 ideas &rarr; <strong>Stage 2.5</strong> (Usuario elige) &rarr;<br>
-    <strong>Stage 3</strong> (Validation, score &ge; 7) &rarr; PROMPT.md &rarr; <strong>Stage 3.3</strong> (Quick Test en datos reales) &rarr;<br>
+    <strong>Stage 3.3</strong> (Quick Test en datos reales, pre-flight check) &rarr;<br>
+    <strong>Stage 3</strong> (Validation, score &ge; 7) &rarr; PROMPT.md &rarr;<br>
     <strong>Stage 3.5</strong> (Usuario aprueba) &rarr; <strong>Stage 3.7</strong> (Referee Preview + assumption audit) &rarr; referee_checklist.md &rarr;<br>
     <strong>Stage 4</strong> (Strategy + Code, intervención manual Claude) &rarr; results_summary.md &rarr;<br>
     <strong>Stage 4.5</strong> (Data Audit automático) &rarr; data_audit.md &rarr;<br>
-    <strong>Stage 5</strong> (Writing, intervención manual Claude) &rarr; main.tex &rarr; <strong>Stage 6</strong> (Peer Review, umbrales determinísticos) &rarr;<br>
+    <strong>Stage 4.7</strong> (Code Review automático: review-paper-code + corrección max 3 rondas) &rarr;<br>
+    <strong>Stage 5</strong> (Writing, intervención manual Claude) &rarr; main.tex &rarr; <strong>Stage 6</strong> (Peer Review, 6 agentes en paralelo) &rarr;<br>
     Accepted paper &rarr; <strong>Stage 7</strong> (Submission, score &ge; 85) &rarr; <strong>Paper PDF final + feedback.pdf</strong>
   </div>
 
   <h3>Resumen del pipeline</h3>
   <table>
     <tr><th>Stage</th><th>Nombre</th><th>Sistema</th><th>Automático?</th><th>Lenguaje</th></tr>
-    <tr><td>1A</td><td>Discovery (repos)</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto</td><td>—</td></tr>
-    <tr><td>1B</td><td>Discovery (user data)</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto</td><td>Python</td></tr>
+    <tr><td>1</td><td>Discovery (Path A/B/C)</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto</td><td>Python</td></tr>
+    <tr><td>1.5</td><td>Data Loading (Path A)</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto</td><td>Python</td></tr>
     <tr><td>2</td><td>Ideation</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto</td><td>—</td></tr>
     <tr><td style="font-weight:700">2.5</td><td style="font-weight:700">Idea Selection</td><td style="font-weight:700">Usuario</td><td style="color:#DC2626;font-weight:700">&#129489; Humano</td><td>—</td></tr>
+    <tr><td>3.3</td><td>Quick Empirical Test</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto (pre-flight)</td><td>Python</td></tr>
     <tr><td>3</td><td>Validation</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto (loop)</td><td>—</td></tr>
-    <tr style="background:#F0FDF4"><td>3.3</td><td>Quick Empirical Test</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto (NEW)</td><td>Python</td></tr>
     <tr><td style="font-weight:700">3.5</td><td style="font-weight:700">Strategy Review</td><td style="font-weight:700">Usuario</td><td style="color:#DC2626;font-weight:700">&#129489; Humano</td><td>—</td></tr>
     <tr><td>3.7</td><td>Referee Preview</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto</td><td>—</td></tr>
     <tr><td>4</td><td>Strategy &amp; Code</td><td>Clo-Author</td><td style="color:#D97706;font-weight:700">Manual intervention (Claude)</td><td>Python</td></tr>
-    <tr><td>4.5</td><td>Data Audit</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto (NEW)</td><td>Python</td></tr>
+    <tr><td>4.5</td><td>Data Audit</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto</td><td>Python</td></tr>
+    <tr><td>4.7</td><td>Code Review</td><td>Papers-HQ</td><td style="color:#16A34A">&#10003; Auto (review-paper-code)</td><td>—</td></tr>
     <tr><td>5</td><td>Writing</td><td>Clo-Author</td><td style="color:#D97706;font-weight:700">Manual intervention (Claude)</td><td>LaTeX</td></tr>
-    <tr><td>6</td><td>Peer Review</td><td>Clo-Author</td><td style="color:#16A34A">&#10003; Auto (umbrales determinísticos)</td><td>—</td></tr>
-    <tr><td>7</td><td>Submission</td><td>Clo-Author</td><td style="color:#16A34A">&#10003; Auto (gate &ge; 70)</td><td>—</td></tr>
+    <tr><td>6</td><td>Peer Review</td><td>Clo-Author</td><td style="color:#16A34A">&#10003; Auto (6 agentes paralelos)</td><td>—</td></tr>
+    <tr><td>7</td><td>Submission</td><td>Clo-Author</td><td style="color:#16A34A">&#10003; Auto (gate &ge; 85)</td><td>—</td></tr>
   </table>
 
   <div class="footer">
@@ -244,13 +250,66 @@
     <strong>Priorización:</strong> Tier 1 (RCT/experiment, ceiling 90+) &gt; Tier 2 (natural experiment/staggered DiD, ceiling 85+) &gt; Tier 3 (observational panel, ceiling 75+). Los datasets se prueban en orden de prioridad — RCTs primero.
   </div>
 
-  <h3>Handoff a Stage 2 (todos los paths)</h3>
-  <div class="handoff">&rarr; 3 seed papers (título, autores, DOI, resumen) + contexto del dataset &rarr; research-junshi</div>
+  <h3>Handoff a Stage 1.5 (Path A) o Stage 2 (Paths B y C)</h3>
+  <div class="handoff">&rarr; 3 seed papers (título, autores, DOI, resumen) + recomendaciones de datasets (Path A) o dataset perfilado (Paths B/C)</div>
   <p><strong>Modo:</strong> Completamente automático. No requiere intervención del usuario.</p>
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
     <span>Página 3</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- PAGE 3b: STAGE 1.5 — DATA LOADING         -->
+<!-- ══════════════════════════════════════════ -->
+<div class="page">
+  <span class="section-badge" style="background:#CFFAFE;color:#0E7490">PAPERS-HQ</span>
+  <h2>2b. Stage 1.5: Data Loading</h2>
+
+  <p><strong>Objetivo:</strong> Descargar y perfilar los datasets candidatos identificados por Stage 1 (Path A). Para Paths B y C, este stage se omite porque la data ya está cargada.</p>
+
+  <h3>Cuándo se ejecuta</h3>
+  <table>
+    <tr><th>Path</th><th>¿Stage 1.5?</th><th>Razón</th></tr>
+    <tr><td>A (<code>--topic</code>)</td><td style="color:#16A34A;font-weight:700">&#10003; SÍ</td><td>Stage 1 solo recomienda datasets — Stage 1.5 los baja y los perfila</td></tr>
+    <tr><td>B (<code>--data</code>)</td><td style="color:#94A3B8">SKIP</td><td>El usuario ya proveyó el dataset, ya fue perfilado en Stage 1</td></tr>
+    <tr><td>C (<code>--path-c</code>)</td><td style="color:#94A3B8">SKIP</td><td>Stage 1 ya descargó y perfiló como parte del flujo data-first</td></tr>
+  </table>
+
+  <h3>Proceso (Path A)</h3>
+  <table>
+    <tr><th>#</th><th>Paso</th><th>Detalle</th></tr>
+    <tr><td>1</td><td>Descarga segura</td><td>Para cada dataset recomendado: download a <code>projects/&lt;name&gt;/data/raw/</code> con sanitización de nombres (previene path traversal y nombres reservados de Windows).</td></tr>
+    <tr><td>2</td><td>Detección de formato</td><td>Pandas detecta CSV / XLSX / DTA / Parquet / TSV automáticamente según extensión y contenido.</td></tr>
+    <tr><td>3</td><td>Profiling estructural</td><td>Shape (filas × columnas), tipos de columnas, identificadores candidatos, dimensión temporal, resumen de NA por columna.</td></tr>
+    <tr><td>4</td><td>Estadísticas descriptivas</td><td>Para columnas numéricas: media, mediana, min, max, std. Para categóricas: número de niveles únicos, frecuencias top.</td></tr>
+    <tr><td>5</td><td>Resumen consolidado</td><td>Se persiste <code>downloaded_datasets[]</code> en <code>pipeline_state.json</code> con <code>name</code>, <code>local_path</code>, y <code>profile</code> completo.</td></tr>
+  </table>
+
+  <h3>Output</h3>
+  <div class="success-box">
+    <strong>Archivos:</strong> <code>data/raw/*</code> (datasets físicos descargados), <code>pipeline_state.json</code> (entrada <code>stage1_5</code>)<br>
+    <strong>Contenido del state:</strong>
+    <ul>
+      <li>Lista de datasets con paths locales</li>
+      <li>Profile estructural por dataset (shape, dtypes, identifiers)</li>
+      <li>Summary stats numéricos y categóricos</li>
+      <li>Patrones de missingness por columna</li>
+    </ul>
+  </div>
+
+  <div class="info-box">
+    <strong>¿Por qué un stage separado?</strong> En Path A, Stage 1 retorna recomendaciones de datasets (URLs, DOIs) — pero descargar y perfilar puede tardar varios minutos por dataset. Aislarlo permite reanudar con <code>--from-stage 1.5</code> si la descarga falló sin re-ejecutar la búsqueda.
+  </div>
+
+  <h3>Handoff a Stage 2</h3>
+  <div class="handoff">&rarr; Datasets descargados y perfilados &rarr; Stage 2 los usa para constrain ideación a variables que existen realmente</div>
+  <p><strong>Modo:</strong> Completamente automático.</p>
+
+  <div class="footer">
+    <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
+    <span>Página 4</span>
   </div>
 </div>
 
@@ -295,12 +354,12 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 4</span>
+    <span>Página 5</span>
   </div>
 </div>
 
 <!-- ══════════════════════════════════════════ -->
-<!-- PAGE 5: STAGE 2.5 — IDEA SELECTION        -->
+<!-- PAGE 6: STAGE 2.5 — IDEA SELECTION        -->
 <!-- ══════════════════════════════════════════ -->
 <div class="page">
   <span class="section-badge" style="background:#FEE2E2;color:#991B1B">CHECKPOINT HUMANO</span>
@@ -342,7 +401,7 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 5</span>
+    <span>Página 6</span>
   </div>
 </div>
 
@@ -374,7 +433,7 @@
   </table>
 
   <div class="warning-box">
-    <strong>Loop:</strong> Si el score &lt; 7, se regresa al paso 2 con feedback. <strong>Máximo 5 iteraciones.</strong> Si tras 5 loops el score sigue &lt; 7, el pipeline se detiene con aviso: <em>"&#9888; Idea estancada tras 5 rondas de refinamiento (mejor score: X/10). Regresando a Stage 2.5 para seleccionar otra idea."</em> Solo si las 3 ideas fueron agotadas se vuelve a Stage 2.
+    <strong>Loop:</strong> Si el score &lt; 7, se regresa al paso 2 con feedback. <strong>Máximo 2 pivots</strong> (<code>MAX_STAGE3_PIVOTS = 2</code> en <code>pipeline/config.py</code>). Si tras agotar los pivots el score sigue &lt; 7, el pipeline se detiene con aviso: <em>"&#9888; Idea estancada tras 2 rondas de refinamiento (mejor score: X/10). Regresando a Stage 2.5 para seleccionar otra idea."</em> Solo si las 3 ideas fueron agotadas se vuelve a Stage 2.
   </div>
 
   <div class="info-box">
@@ -393,7 +452,7 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 6</span>
+    <span>Página 7</span>
   </div>
 </div>
 
@@ -444,7 +503,7 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 6b</span>
+    <span>Página 8</span>
   </div>
 </div>
 
@@ -490,7 +549,7 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 7</span>
+    <span>Página 9</span>
   </div>
 </div>
 
@@ -565,7 +624,7 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 8</span>
+    <span>Página 10</span>
   </div>
 </div>
 
@@ -630,7 +689,7 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 9</span>
+    <span>Página 11</span>
   </div>
 </div>
 
@@ -673,13 +732,86 @@
     <strong>Uso posterior:</strong> <code>data_audit.md</code> se incluye en el evidence packet que reciben los referees en Stage 6, proporcionando evidencia de que los datos fueron auditados antes de la escritura del paper.
   </div>
 
-  <h3>Handoff a Stage 5</h3>
-  <div class="handoff">&rarr; data_audit.md — reporte de auditoría de datos, listo para ser referenciado en el paper</div>
+  <h3>Handoff a Stage 4.7</h3>
+  <div class="handoff">&rarr; data_audit.md — reporte de auditoría de datos, listo para ser referenciado en el paper y consumido por el code review</div>
   <p><strong>Modo:</strong> Completamente automático.</p>
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 10</span>
+    <span>Página 12</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- PAGE 10b: STAGE 4.7 — CODE REVIEW         -->
+<!-- ══════════════════════════════════════════ -->
+<div class="page">
+  <span class="section-badge" style="background:#E0E7FF;color:#3730A3">PAPERS-HQ</span>
+  <h2>6c. Stage 4.7: Code Review — <code>review-paper-code</code> skill</h2>
+
+  <p><strong>Objetivo:</strong> Revisar automáticamente los scripts generados en Stage 4 antes de pasar a la escritura del paper, detectando problemas de reproducibilidad, calidad de código, y desalineación entre el código y lo que prometen los referees del Stage 3.7. Si encuentra problemas críticos, los corrige y vuelve a revisar.</p>
+
+  <h3>Input</h3>
+  <ul>
+    <li><code>scripts/python/*.py</code> — Scripts numerados generados por Stage 4 (1_load, 2_clean, 3_analyze, 4_output)</li>
+    <li><code>strategy_memo.md</code> — Estrategia formalizada (para verificar alineación)</li>
+    <li><code>strategy/referee_checklist.md</code> — Requisitos MUST/SHOULD/NICE de Stage 3.7</li>
+    <li><code>data/clean/*.csv</code> + <code>main_results.csv</code> — Outputs producidos por los scripts</li>
+  </ul>
+
+  <h3>Proceso — 2 agentes revisores en paralelo</h3>
+  <div class="two-col">
+    <div>
+      <h4>Reproducibility &amp; Quality</h4>
+      <ul>
+        <li>¿Los scripts corren end-to-end sin error?</li>
+        <li>¿Hay seeds fijados donde corresponde?</li>
+        <li>¿Los paths son relativos / portables?</li>
+        <li>Estructura, claridad, comentarios, código comentado huérfano</li>
+        <li>Transformaciones opacas o thresholds mágicos sin justificar</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Paper-Code Alignment</h4>
+      <ul>
+        <li>Tablas <code>.tex</code> vs. lo que producen los scripts</li>
+        <li>Variables del paper vs. variables del código</li>
+        <li>Sample restrictions, métodos, clustering, fixed effects</li>
+        <li>Cumplimiento del referee_checklist</li>
+        <li>Estimadores marcados como BROKEN en Stage 3.3 no usados</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Loop de auto-corrección</h3>
+  <table>
+    <tr><th>Fase</th><th>Acción</th></tr>
+    <tr><td>1. Backup</td><td>Antes de cada ronda, los scripts se copian a <code>scripts/python/backup_r1/</code>, <code>backup_r2/</code>, etc. Permite rollback si una corrección rompe más de lo que arregla.</td></tr>
+    <tr><td>2. Detección</td><td>Si la review detecta issues críticos (reproducibilidad rota, claim del paper sin código que lo respalde, etc.) entra al loop de corrección.</td></tr>
+    <tr><td>3. Corrección</td><td>Un agente correctivo modifica los scripts según los issues detectados.</td></tr>
+    <tr><td>4. Re-review</td><td>Vuelve a correr la revisión completa con los scripts corregidos.</td></tr>
+    <tr><td>5. Cap</td><td><code>MAX_CODE_REVIEW_ROUNDS = 3</code> en <code>pipeline/config.py</code>. Si tras 3 rondas siguen quedando issues críticos, se reportan al usuario para intervención manual.</td></tr>
+  </table>
+
+  <div class="info-box">
+    <strong>Skill base:</strong> <code>Skills/review-paper-code.md</code> (originalmente desarrollado por <a href="https://claesbackman.com">Claes Bäckman</a>). El pipeline lo invoca via <code>claude -p</code> con dos prompts especializados (reproducibilidad / alineación) corriendo en paralelo.
+  </div>
+
+  <h3>Output</h3>
+  <div class="success-box">
+    <code>quality_reports/code_review_report.md</code> — Hallazgos consolidados con prioridad<br>
+    <code>scripts/python/backup_r{N}/</code> — Snapshots por ronda de corrección<br>
+    <code>scripts/python/*.py</code> — Versión corregida (in-place, con backups disponibles)<br>
+    Estado en <code>pipeline_state.json</code>: <code>stage4_7</code> con issues, fixes aplicados, score final
+  </div>
+
+  <h3>Handoff a Stage 5</h3>
+  <div class="handoff">&rarr; Scripts validados &rarr; Stage 5 puede confiar que los outputs (tablas, figuras, results_summary) están alineados con el paper que va a escribir</div>
+  <p><strong>Modo:</strong> Completamente automático.</p>
+
+  <div class="footer">
+    <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
+    <span>Página 13</span>
   </div>
 </div>
 
@@ -756,41 +888,39 @@
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 11</span>
+    <span>Página 14</span>
   </div>
 </div>
 
 <!-- ══════════════════════════════════════════ -->
-<!-- PAGE 12: STAGE 6 — PEER REVIEW            -->
+<!-- PAGE 15: STAGE 6 — PEER REVIEW            -->
 <!-- ══════════════════════════════════════════ -->
 <div class="page">
   <span class="section-badge" style="background:#FEF3C7;color:#92400E">CLO-AUTHOR</span>
-  <h2>8. Stage 6: Peer Review — Clo-Author</h2>
+  <h2>8. Stage 6: Peer Review — 6-agent <code>review-paper</code> skill</h2>
 
-  <p><strong>Objetivo:</strong> Simular un proceso de revisión por pares realista, con un editor y dos referees independientes, usando <strong>umbrales determinísticos</strong> para la decisión editorial.</p>
+  <p><strong>Objetivo:</strong> Simular una revisión por pares rigurosa lanzando <strong>6 agentes especializados en paralelo</strong> que cubren distintos focos del paper, y aplicando <strong>umbrales determinísticos</strong> sobre el promedio de scores para decidir el destino editorial.</p>
 
   <h3>Input</h3>
-  <p><code>paper/main.tex</code> compilado como PDF.</p>
+  <p><code>paper/main.tex</code> compilado como PDF, junto con los artefactos de Stage 4 / 4.5 / 4.7 que sirven como evidence packet.</p>
 
-  <h3>Sub-fase 6a: Desk Review (editor)</h3>
-  <p>Evaluación inicial: verificación de novedad (web search), evaluación de journal fit, decisión de enviar a referees o desk reject.</p>
-  <div class="warning-box">Si el editor hace desk reject, el paper regresa a Stage 5 con feedback específico.</div>
+  <h3>Sub-fase 6a: Pre-review consistency check</h3>
+  <p>Antes de lanzar los 6 agentes, el pipeline lee todas las secciones, tablas y CSVs de resultados, y auto-corrige contradicciones evidentes (números que no matchean entre tabla y texto, citations rotas, símbolos inconsistentes). Esto evita que los agentes pierdan tiempo reportando problemas triviales.</p>
 
-  <h3>Sub-fase 6b: Referee Reports (ciegos, independientes, en paralelo)</h3>
-  <div class="two-col">
-    <div>
-      <h4>Domain-referee</h4>
-      <p>Evalúa desde la perspectiva del campo: contribución a la literatura, cobertura, validez externa, relevancia para el journal.</p>
-    </div>
-    <div>
-      <h4>Methods-referee</h4>
-      <p>Evalúa la solidez metodológica: identificación causal, inferencia estadística, robustez de resultados, calidad del análisis.</p>
-    </div>
-  </div>
+  <h3>Sub-fase 6b: 6 agentes especializados (en paralelo)</h3>
+  <table>
+    <tr><th>#</th><th>Agente</th><th>Foco</th></tr>
+    <tr><td>1</td><td><strong>Spelling &amp; Grammar</strong></td><td>Ortografía, gramática, estilo académico, registro formal</td></tr>
+    <tr><td>2</td><td><strong>Internal Consistency</strong></td><td>Cross-references, números entre tabla / texto / abstract, símbolos consistentes</td></tr>
+    <tr><td>3</td><td><strong>Unsupported Claims</strong></td><td>Afirmaciones causales sin respaldo, integridad de la identificación, overclaiming</td></tr>
+    <tr><td>4</td><td><strong>Mathematics &amp; Notation</strong></td><td>Ecuaciones, notación, derivaciones, definiciones de variables</td></tr>
+    <tr><td>5</td><td><strong>Tables &amp; Figures</strong></td><td>Documentación, footnotes, unidades, referencia desde el texto</td></tr>
+    <tr><td>6</td><td><strong>Contribution Referee</strong> (adversarial)</td><td>Evaluación adversarial de contribución, fit al journal, novedad</td></tr>
+  </table>
 
-  <h4>Evidence packet (los referees reciben)</h4>
   <div class="info-box">
-    Además del PDF del paper, los referees reciben: <code>data_audit.md</code>, <code>results_summary.md</code>, <code>cell_sizes.csv</code>, tablas <code>.tex</code> reales del código, y un code review. <strong>Field calibration:</strong> prácticas estándar de CHE (health economics) no se penalizan; los referees deben verificar claims contra la evidencia proporcionada.
+    <strong>Evidence packet (todos los agentes reciben):</strong> <code>data_audit.md</code>, <code>results_summary.md</code>, <code>cell_sizes.csv</code>, tablas <code>.tex</code> reales del código, code review report de Stage 4.7. Esto garantiza que los agentes verifiquen claims contra la evidencia, no contra prácticas asumidas.<br><br>
+    <strong>Implementación:</strong> los 6 prompts corren en paralelo via <code>concurrent.futures</code> con <code>MAX_PARALLEL_AGENTS</code> (default 2). El agente 6 (contribution referee) tiene timeout extendido por la complejidad de la evaluación adversarial.
   </div>
 
   <h3>Sub-fase 6c: Decisión editorial — Umbrales determinísticos</h3>
@@ -814,18 +944,19 @@
 
   <h3>Output</h3>
   <div class="success-box">
-    <code>quality_reports/reviews/</code> — Reportes de referees + decisión editorial<br>
-    <code>response_letter.md</code> — Carta de respuesta punto por punto (si hay R&amp;R)
+    <code>quality_reports/reviews/</code> — 6 reportes individuales + síntesis editorial<br>
+    <code>response_letter.md</code> — Carta de respuesta punto por punto (si hay R&amp;R)<br>
+    Estado: <code>stage6</code> con scores por agente, decisión, y número de ronda R&amp;R
   </div>
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 12</span>
+    <span>Página 15</span>
   </div>
 </div>
 
 <!-- ══════════════════════════════════════════ -->
-<!-- PAGE 13: STAGE 7 + QUALITY                -->
+<!-- PAGE 14: STAGE 7 + QUALITY                -->
 <!-- ══════════════════════════════════════════ -->
 <div class="page">
   <span class="section-badge" style="background:#EDE9FE;color:#5B21B6">CLO-AUTHOR</span>
@@ -902,12 +1033,12 @@
   </div>
 
   <div class="info-box" style="margin-top: 10px;">
-    <strong>12 stages, 2 checkpoints humanos (qué investigar + cómo identificarlo), 2 stages de intervención manual (código + escritura), el resto automático.</strong> Incluye: Stage 3.3 (Quick Empirical Test), identification-first scoring (ID×0.4), assumption audit por método, outcome validation, falsification planning, sanity checks, writing standards, feedback.pdf visual, y scores dinámicos. Gate: aggregate &ge; 85, cada componente &ge; 70. Todo el análisis econométrico en Python.
+    <strong>14 stages, 2 checkpoints humanos (qué investigar + cómo identificarlo), 2 stages de intervención manual (código + escritura), el resto automático.</strong> Incluye: Stage 1.5 (Data Loading para Path A), Stage 3.3 (Quick Empirical Test pre-flight), Stage 4.7 (Code Review automático con review-paper-code skill), identification-first scoring (ID×0.4), assumption audit por método, outcome validation, falsification planning, sanity checks, writing standards, peer review por 6 agentes en paralelo, feedback.pdf visual, y scores dinámicos. Gate: aggregate &ge; 85, cada componente &ge; 70. Todo el análisis econométrico en Python.
   </div>
 
   <div class="footer">
     <span>Papers-HQ + Clo-Author — Explicación del Pipeline</span>
-    <span>Página 13</span>
+    <span>Página 16</span>
   </div>
 </div>
 

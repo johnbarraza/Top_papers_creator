@@ -121,7 +121,7 @@ Eight-step evaluation collapsed into 4 calls (happy path: A → 5 → 6 → C):
 | 6 | Verify literature review |
 | C (7+8) | Final verdict + review |
 
-**Loops:** up to 5 pivots before marking `STALLED`. `final_score < 5` → `REJECTED_WEAK_ID`, returns to Stage 2.5.
+**Loops:** up to `MAX_STAGE3_PIVOTS` (default 2) before marking `STALLED`. `final_score < 5` → `REJECTED_WEAK_ID`, returns to Stage 2.5.
 
 ### Stage 3.3 — Quick Empirical Test
 

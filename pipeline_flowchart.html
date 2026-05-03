@@ -19,17 +19,17 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 .leg .d { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .leg .s { width: 9px; height: 6px; border-radius: 2px; display: inline-block; border: 0.5px solid; }
 
-/* ── Flow row: cards interleaved with arrows ── */
+/* Flow row: cards interleaved with arrows */
 .flow { display: flex; align-items: stretch; gap: 0; }
 .flow .card { flex: 1; min-width: 0; }
 
 /* Arrow connector between cards */
-.flow .arrow-conn { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 16px; width: 36px; flex-shrink: 0; }
-.flow .arrow-conn .shaft { width: 18px; height: 1.5px; background: #94A3B8; position: relative; }
+.flow .arrow-conn { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 16px; width: 30px; flex-shrink: 0; }
+.flow .arrow-conn .shaft { width: 14px; height: 1.5px; background: #94A3B8; position: relative; }
 .flow .arrow-conn .shaft::after { content: ''; position: absolute; right: -4px; top: -3px; border-left: 5px solid #64748B; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; }
-.flow .arrow-conn .artifact { background: #FFFBEB; border: 0.6px solid #FCD34D; border-radius: 8px; padding: 1px 5px; font-size: 5pt; color: #92400E; font-weight: 500; margin-top: 3px; white-space: nowrap; text-align: center; }
+.flow .arrow-conn .artifact { background: #FFFBEB; border: 0.6px solid #FCD34D; border-radius: 8px; padding: 1px 4px; font-size: 4.8pt; color: #92400E; font-weight: 500; margin-top: 3px; white-space: nowrap; text-align: center; }
 
-/* ── Cards ── */
+/* Cards */
 .card { border-radius: 6px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.06); border: 1px solid #E2E8F0; background: #fff; font-size: 6.5pt; display: flex; flex-direction: column; }
 .card-h { padding: 4px 6px; display: flex; align-items: center; gap: 4px; }
 .badge { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 7.5pt; flex-shrink: 0; }
@@ -78,8 +78,9 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 .card.teal .card-h{background:#F0FDFA} .card.teal .badge{background:#0F766E} .card.teal .card-t{color:#0F766E} .card.teal .io{border-color:#5EEAD4;background:#F0FDFA}
 .card.amber .card-h{background:#FFFBEB} .card.amber .badge{background:#B45309} .card.amber .card-t{color:#B45309} .card.amber .io{border-color:#FCD34D;background:#FFFBEB}
 .card.indigo .card-h{background:#EEF2FF} .card.indigo .badge{background:#4338CA} .card.indigo .card-t{color:#4338CA} .card.indigo .io{border-color:#A5B4FC;background:#EEF2FF}
+.card.cyan .card-h{background:#ECFEFF} .card.cyan .badge{background:#0E7490} .card.cyan .card-t{color:#0E7490} .card.cyan .io{border-color:#67E8F9;background:#ECFEFF}
 
-/* Loop arrows (CSS-only) */
+/* Loop arrows */
 .loop-row { display: flex; align-items: flex-start; margin-top: 3px; padding: 0 5%; }
 .loop-line { flex: 1; border-bottom: 1.5px dashed #DC2626; position: relative; height: 10px; }
 .loop-line::before { content: ''; position: absolute; left: 0; top: -3px; border-right: 5px solid #DC2626; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; }
@@ -99,7 +100,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 
 <!-- ═══════ PAGE 1 ═══════ -->
 <div class="page">
-<div class="hdr"><h1>Papers-HQ + Clo-Author: Pipeline Flow</h1><div class="sub">Page 1 of 3 &mdash; Stages 1&ndash;3: Discovery, Ideation, Idea Selection, Validation</div></div>
+<div class="hdr"><h1>Papers-HQ: Pipeline Flow</h1><div class="sub">Page 1 of 3 &mdash; Stages 1&ndash;3.3: Discovery, Data Loading, Ideation, Idea Selection, Quick Empirical Test</div></div>
 <div class="leg">
   <div class="i"><span class="s" style="background:#94A3B8;border-color:#64748B;"></span><span style="font-size:7pt;margin-left:1px;">&#x2192;</span> Data flow</div>
   <div class="i"><span style="display:inline-block;width:14px;border-top:1.5px dashed #DC2626;"></span> Loop</div>
@@ -114,29 +115,45 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
   <div class="card blue">
     <div class="card-h"><div class="badge">1</div><div><div class="card-t">Discovery</div><div class="card-st">Path A, B, or C</div></div></div>
     <div class="card-b">
-      <div class="st">Path A: Topic Search (--topic)</div>
-      <ul><li>Search natural experiments</li><li>Multi-agent: web + APIs</li><li>Identification-first</li></ul>
-      <div class="st">Path B: User Data (--data)</div>
-      <ul><li>Load &amp; inspect dataset</li><li>Early warning (low N)</li><li>Profile structure</li></ul>
-      <div class="st">Path C: Data-First (--path-c)</div>
-      <ul><li>RCTs &gt; Natural exp &gt; Obs.</li><li>Score ceiling boost for RCTs</li><li>Auto topic suggestion</li></ul>
+      <div class="st">Path A: --topic</div>
+      <ul><li>Search GitHub repos (&ge;50&#9733;)</li><li>Dataverse + Zenodo APIs</li><li>3 seed papers</li></ul>
+      <div class="st">Path B: --data</div>
+      <ul><li>Load &amp; profile dataset</li><li>Early-warning N check</li></ul>
+      <div class="st">Path C: --path-c</div>
+      <ul><li>Best public datasets first</li><li>Auto topic suggestion</li></ul>
     </div>
-    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage1_discovery.md &mdash; 3 seed papers + profile</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">--topic [+ --data]</div></div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage1_discovery.md</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">--topic [+ --data]</div></div>
     <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
   </div>
 
-  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">3 seed<br>papers</div></div>
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">datasets<br>+ papers</div></div>
+
+  <!-- Stage 1.5 (NEW) -->
+  <div class="card cyan">
+    <div class="card-h"><div class="badge" style="font-size:6.5pt">1.5</div><div><div class="card-t">Data Loading</div><div class="card-st">Path A only</div></div></div>
+    <div class="card-b">
+      <div class="st">Download candidates:</div>
+      <ul><li>Safe filename handling</li><li>Profile each dataset</li><li>Shape, IDs, time, NA stats</li></ul>
+      <div class="sp"></div>
+      <div class="st">Skipped if Path B/C</div>
+      <ul><li>User data already loaded</li></ul>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">downloaded_datasets[] + profile</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">stage1 recommendations</div></div>
+    <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">profiled<br>data</div></div>
 
   <!-- Stage 2 -->
   <div class="card orange">
     <div class="card-h"><div class="badge">2</div><div><div class="card-t">Ideation</div><div class="card-st">research-junshi/</div></div></div>
     <div class="card-b">
-      <ul><li>Read seed papers</li><li>Generate 8&ndash;10 ideas</li><li>Score: N&times;0.2+F&times;0.2+I&times;0.2+<b>ID&times;0.4</b></li><li>ID Level A/B/C per idea</li><li>Top 3 (2+ must be Level A/B)</li></ul>
+      <ul><li>Read seed papers</li><li>Generate 8&ndash;10 ideas</li><li>Score: N&times;0.2+F&times;0.2+I&times;0.2+<b>ID&times;0.4</b></li><li>ID Level A/B/C per idea</li><li>Top 3 (2+ Level A/B)</li></ul>
       <div class="sp"></div>
       <div class="st">If Path B:</div>
       <ul><li>Constrain by data structure</li><li>ALLOWED vs FORBIDDEN</li></ul>
     </div>
-    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage2_ideation.md &mdash; top 3</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">3 seed papers (Stage 1)</div></div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage2_ideation.md &mdash; top 3</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">seed papers + datasets</div></div>
     <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
   </div>
 
@@ -144,7 +161,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 
   <!-- Stage 2.5 -->
   <div class="card red">
-    <div class="card-h"><div class="badge">2.5</div><div><div class="card-t">Idea Selection</div><div class="card-st">Human-in-the-Loop</div></div></div>
+    <div class="card-h"><div class="badge" style="font-size:6.5pt">2.5</div><div><div class="card-t">Idea Selection</div><div class="card-st">Human-in-the-Loop</div></div></div>
     <div class="card-b">
       <div class="st">Present top 3:</div>
       <ul><li>Research question</li><li>Methodology</li><li>Score &amp; ranking</li><li>Data sources</li></ul>
@@ -152,7 +169,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
     </div>
     <div class="ch">
       <div class="ch-l">User decides:</div>
-      <span class="p p-ok">SELECT &lt;n&gt; &rarr; Stage 3</span><br>
+      <span class="p p-ok">SELECT &lt;n&gt; &rarr; Stage 3.3</span><br>
       <span class="p p-al">COMBINE &lt;n&gt;&lt;m&gt; &rarr; hybrid</span><br>
       <span class="p p-no">REJECT ALL &rarr; Stage 2 &#8634;</span>
     </div>
@@ -160,24 +177,24 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
     <div class="tg-r"><span class="tg tg-h">Human decision</span></div>
   </div>
 
-  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">selected<br>_idea.md</div></div>
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">selected<br>_idea</div></div>
 
-  <!-- Stage 3 -->
-  <div class="card green">
-    <div class="card-h"><div class="badge">3</div><div><div class="card-t">Validation</div><div class="card-st">idea-evaluation-pipeline/</div></div></div>
+  <!-- Stage 3.3 (moved from page 2 - runs BEFORE Stage 3) -->
+  <div class="card teal">
+    <div class="card-h"><div class="badge" style="font-size:6.5pt">3.3</div><div><div class="card-t">Quick Test</div><div class="card-st">Pre-flight check</div></div></div>
     <div class="card-b">
-      <div class="st">8-step eval (4 calls):</div>
-      <ul><li>1+2. Evaluate + Critic</li><li>3+4. Pivot &lt;6 + Re-eval</li><li>5. Lit review (web)</li><li>6. Verify literature</li><li>7+8. Verdict + Critic</li></ul>
+      <div class="st">Verify on real data:</div>
+      <ul><li>Estimator packages OK?</li><li>Pre-trends F-test</li><li>Permutation (200 draws)</li><li>Entity trends test</li><li>Economic magnitude</li></ul>
       <div class="sp"></div>
-      <div class="w">&#8635; &lt;7 &rarr; retry Step 3 (max 5)</div>
+      <div class="w">FAIL &rarr; retry idea / proceed / new data</div>
     </div>
-    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage3_validation.md &mdash; score&ge;7</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">selected_idea.md</div></div>
-    <div class="tg-r"><span class="tg tg-a">Auto (retry loop)</span></div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">available_estimators + results</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">data + selected_idea</div></div>
+    <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
   </div>
 </div>
 
 <!-- Loop: 2.5 REJECT -> 2 -->
-<div class="loop-row" style="padding: 0 12% 0 22%;">
+<div class="loop-row" style="padding: 0 25% 0 30%;">
   <div class="loop-up-r"></div>
   <div class="loop-line"><div class="loop-label">REJECT ALL &rarr; re-run Stage 2</div></div>
   <div class="loop-up-l"></div>
@@ -189,7 +206,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 
 <!-- ═══════ PAGE 2 ═══════ -->
 <div class="page">
-<div class="hdr"><h1>Papers-HQ + Clo-Author: Pipeline Flow</h1><div class="sub">Page 2 of 3 &mdash; Stages 3.3&ndash;4.5: Quick Test, Strategy Review, Referee Preview, Code, Audit</div></div>
+<div class="hdr"><h1>Papers-HQ: Pipeline Flow</h1><div class="sub">Page 2 of 3 &mdash; Stages 3&ndash;4.5: Validation, Strategy Review, Referee Preview, Code, Audit</div></div>
 <div class="leg">
   <div class="i"><span class="s" style="background:#94A3B8;border-color:#64748B;"></span><span style="font-size:7pt;margin-left:1px;">&#x2192;</span> Data flow</div>
   <div class="i"><span style="display:inline-block;width:14px;border-top:1.5px dashed #DC2626;"></span> Loop</div>
@@ -200,24 +217,25 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 </div>
 
 <div class="flow">
-  <!-- 3.3 (NEW) -->
-  <div class="card teal">
-    <div class="card-h"><div class="badge">3.3</div><div><div class="card-t">Quick Test</div><div class="card-st">Automatic (NEW)</div></div></div>
+  <!-- Stage 3 (full validation, runs AFTER 3.3) -->
+  <div class="card green">
+    <div class="card-h"><div class="badge">3</div><div><div class="card-t">Validation</div><div class="card-st">8-step / 4 calls</div></div></div>
     <div class="card-b">
-      <div class="st">Verify on real data:</div>
-      <ul><li>Test estimator packages</li><li>Basic DiD/treatment test</li><li>Permutation (200 draws)</li><li>Entity trends test</li></ul>
+      <div class="st">Combined steps:</div>
+      <ul><li>A. Eval + Critic (1+2)</li><li>B. Pivot + Re-eval (3+4)</li><li>5. Lit review (Sem.Scholar)</li><li>6. Verify literature</li><li>C. Verdict + Critic (7+8)</li></ul>
       <div class="sp"></div>
-      <div class="w">FAIL &rarr; retry idea or proceed</div>
+      <div class="w">&#8635; score&lt;6 &rarr; pivot (max 2)</div>
+      <div class="w">score&lt;5 &rarr; REJECTED_WEAK_ID</div>
     </div>
-    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">available_estimators + test results</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">data + selected_idea</div></div>
-    <div class="tg-r"><span class="tg tg-n">Auto (NEW)</span></div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">stage3_validation.md (final_score)</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">selected_idea + 3.3 results</div></div>
+    <div class="tg-r"><span class="tg tg-a">Auto (retry loop)</span></div>
   </div>
 
-  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">estimator<br>results</div></div>
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">validated<br>idea</div></div>
 
-  <!-- 3.5 -->
+  <!-- Stage 3.5 -->
   <div class="card red">
-    <div class="card-h"><div class="badge">3.5</div><div><div class="card-t">Strategy Review</div><div class="card-st">Human-in-the-Loop</div></div></div>
+    <div class="card-h"><div class="badge" style="font-size:6.5pt">3.5</div><div><div class="card-t">Strategy Review</div><div class="card-st">Human-in-the-Loop</div></div></div>
     <div class="card-b">
       <div class="st">Phase 1: Data Sources</div>
       <ul><li>Main only or +external?</li><li>Search, download, merge</li></ul>
@@ -236,14 +254,14 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 
   <div class="arrow-conn"><div class="shaft"></div><div class="artifact">approved<br>_strategy</div></div>
 
-  <!-- 3.7 -->
+  <!-- Stage 3.7 -->
   <div class="card teal">
-    <div class="card-h"><div class="badge">3.7</div><div><div class="card-t">Referee Preview</div><div class="card-st">Automatic</div></div></div>
+    <div class="card-h"><div class="badge" style="font-size:6.5pt">3.7</div><div><div class="card-t">Referee Preview</div><div class="card-st">Pre-code referee</div></div></div>
     <div class="card-b">
-      <div style="margin-bottom:2px;">2 referees + assumption audit:</div>
+      <div style="margin-bottom:2px;">2 referees + audit:</div>
       <div class="st">Domain + Methods Referee</div>
-      <ul><li>Assumption audit by method</li><li>DiD/IV/RDD/RCT checklists</li><li>Sanity checks + falsification</li></ul>
-      <div class="st">Filter vs verified estimators</div>
+      <ul><li>Assumption audit by method</li><li>DiD/IV/RDD/RCT checklists</li><li>Sanity + falsification tests</li></ul>
+      <div class="st">Filter verified estimators</div>
       <ul><li>Downgrade broken estimators</li><li>Only promise what works</li></ul>
     </div>
     <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">referee_checklist.md (MUST/SHOULD/NICE)</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">approved_strategy.md</div></div>
@@ -252,24 +270,26 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 
   <div class="arrow-conn"><div class="shaft"></div><div class="artifact">referee<br>_checklist</div></div>
 
-  <!-- 4 -->
+  <!-- Stage 4 -->
   <div class="card amber">
-    <div class="card-h"><div class="badge">4</div><div><div class="card-t">Strategy &amp; Code</div><div class="card-st">Manual Intervention</div></div></div>
+    <div class="card-h"><div class="badge">4</div><div><div class="card-t">Strategy &amp; Code</div><div class="card-st">Strategy + Code subagents</div></div></div>
     <div class="card-b">
-      <div class="st">Claude (conversation):</div>
-      <ul><li>Validated packages ONLY</li><li>Outcome validation (corr check)</li><li>Sanity check + falsification</li><li>Scripts: 00-03, execute all</li></ul>
-      <div class="st">Pipeline validates:</div>
-      <ul><li>4 scripts exist + run OK</li><li>main_results.csv &gt; 0 rows</li><li>Dynamic code score</li></ul>
+      <div class="st">4a Strategy Memo</div>
+      <ul><li>ID tier scoring (1&ndash;4)</li><li>Variables, assumptions</li></ul>
+      <div class="st">4b/c Code Generation</div>
+      <ul><li>Python: 1_load &rarr; 4_output</li><li>Auto pip install</li><li>Subprocess execute (timeout 600s)</li><li>Critic gate &ge; 70</li></ul>
+      <div class="sp"></div>
+      <div class="w">&#8635; error &rarr; fix &rarr; retry (max 1)</div>
     </div>
-    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">results_summary.md, scripts/, tables/, figures/</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">referee_checklist.md</div></div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">strategy_memo, scripts/, tables/, figures/</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">referee_checklist.md</div></div>
     <div class="tg-r"><span class="tg tg-m">Manual intervention</span></div>
   </div>
 
   <div class="arrow-conn"><div class="shaft"></div><div class="artifact">clean<br>_data.csv</div></div>
 
-  <!-- 4.5 -->
+  <!-- Stage 4.5 -->
   <div class="card indigo">
-    <div class="card-h"><div class="badge">4.5</div><div><div class="card-t">Data Audit</div><div class="card-st">Quality gate</div></div></div>
+    <div class="card-h"><div class="badge" style="font-size:6.5pt">4.5</div><div><div class="card-t">Data Audit</div><div class="card-st">Quality gate</div></div></div>
     <div class="card-b">
       <div class="st">Sanity checks BEFORE paper:</div>
       <ul><li><b>1.</b> Distribution checks</li><li><b>2.</b> Cell sizes (N&lt;30 flagged)</li><li><b>3.</b> Outcome distribution</li><li><b>4.</b> Outlier detection</li></ul>
@@ -277,7 +297,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
       <div class="w">&bull; CRITICAL &rarr; warn user</div>
     </div>
     <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">data_audit.md (to referees Stg 6)</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">clean_data.csv</div></div>
-    <div class="tg-r"><span class="tg tg-n">Automatic (NEW)</span></div>
+    <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
   </div>
 </div>
 
@@ -294,7 +314,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 
 <!-- ═══════ PAGE 3 ═══════ -->
 <div class="page">
-<div class="hdr"><h1>Papers-HQ + Clo-Author: Pipeline Flow</h1><div class="sub">Page 3 of 3 &mdash; Stages 5&ndash;7: Writing, Peer Review, Submission</div></div>
+<div class="hdr"><h1>Papers-HQ: Pipeline Flow</h1><div class="sub">Page 3 of 3 &mdash; Stages 4.7&ndash;7: Code Review, Writing, Peer Review, Submission</div></div>
 <div class="leg">
   <div class="i"><span class="s" style="background:#94A3B8;border-color:#64748B;"></span><span style="font-size:7pt;margin-left:1px;">&#x2192;</span> Data flow</div>
   <div class="i"><span style="display:inline-block;width:14px;border-top:1.5px dashed #DC2626;"></span> Loop</div>
@@ -305,37 +325,47 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
 </div>
 
 <div class="flow">
-  <!-- 5 -->
-  <div class="card amber">
-    <div class="card-h"><div class="badge">5</div><div><div class="card-t">Writing</div><div class="card-st">Manual Intervention</div></div></div>
+  <!-- Stage 4.7 (NEW) -->
+  <div class="card indigo">
+    <div class="card-h"><div class="badge" style="font-size:6.5pt">4.7</div><div><div class="card-t">Code Review</div><div class="card-st">review-paper-code skill</div></div></div>
     <div class="card-b">
-      <div class="st">Claude writes single main.tex:</div>
-      <ul><li>CSVs embedded in prompt</li><li>Data disclaimer (what's missing)</li><li>5,000-12,000 words required</li><li>Writing standards (no hedging)</li></ul>
-      <div class="st">Pipeline validates:</div>
-      <ul><li>PDF exists + &gt;5KB</li><li>LaTeX error detection</li><li>Dynamic paper score</li></ul>
+      <div class="st">2 reviewer agents:</div>
+      <ul><li>Reproducibility</li><li>Code quality &amp; clarity</li><li>Paper&ndash;code alignment</li></ul>
       <div class="sp"></div>
-      <div class="w">&#8635; R&amp;R: detects code bugs &rarr; fix scripts first</div>
+      <div class="st">Auto-correction loop:</div>
+      <ul><li>Fix scripts on critical issues</li><li>Backup &rarr; backup_r1, r2, r3</li><li>Re-review (max 3 rounds)</li></ul>
     </div>
-    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">paper/main.tex + main.pdf</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">results_summary, tables/, figures/</div></div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">code_review_report.md + fixed scripts</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">scripts/python/ + main_results.csv</div></div>
+    <div class="tg-r"><span class="tg tg-a">Fully automatic</span></div>
+  </div>
+
+  <div class="arrow-conn"><div class="shaft"></div><div class="artifact">validated<br>scripts</div></div>
+
+  <!-- Stage 5 -->
+  <div class="card amber">
+    <div class="card-h"><div class="badge">5</div><div><div class="card-t">Writing</div><div class="card-st">writer + critic agents</div></div></div>
+    <div class="card-b">
+      <div class="st">Claude writes main.tex:</div>
+      <ul><li>CSVs embedded in prompt</li><li>Data disclaimer transparency</li><li>5,000&ndash;12,000 words</li><li>No hedging language</li></ul>
+      <div class="st">Pipeline validates:</div>
+      <ul><li>PDF exists + &gt;5KB</li><li>LaTeX error detection</li><li>Backup before regex fix</li></ul>
+      <div class="sp"></div>
+      <div class="w">&#8635; R&amp;R: code bugs &rarr; fix scripts first</div>
+    </div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">paper/main.tex + main.pdf</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">results, tables/, figures/</div></div>
     <div class="tg-r"><span class="tg tg-m">Manual intervention</span></div>
   </div>
 
   <div class="arrow-conn"><div class="shaft"></div><div class="artifact">main.tex<br>(compiled)</div></div>
 
-  <!-- 6 -->
+  <!-- Stage 6 (UPDATED: 6 agents in parallel) -->
   <div class="card purple">
-    <div class="card-h"><div class="badge">6</div><div><div class="card-t">Peer Review</div><div class="card-st">editor + 2 referees</div></div></div>
+    <div class="card-h"><div class="badge">6</div><div><div class="card-t">Peer Review</div><div class="card-st">6-agent review-paper skill</div></div></div>
     <div class="card-b">
-      <div class="st">6a. Editor Desk Review</div>
-      <ul><li>PROCEED or DESK_REJECT</li></ul>
-      <div class="st">6b. Referees (parallel)</div>
-      <ul><li>Domain + Methods referee</li></ul>
-      <div style="margin:1px 0;padding:1.5px 3px;background:#FAF5FF;border-radius:3px;border:0.5px solid #E9D5FF;font-size:5.5pt;">
-        <b>Evidence:</b> data_audit, results, cell_sizes, tables<br>
-        <b>Calibration:</b> standard practices OK
-      </div>
-      <div class="st">6c. Deterministic Decision</div>
-      <ul style="font-size:5.8pt;"><li>&ge;75 no fatal &rarr; ACCEPT</li><li>60-74 &rarr; MINOR/MAJOR</li><li>&lt;60 &rarr; MAJOR_REV (R&amp;R)</li><li>&lt;40+fatal &rarr; REJECT</li></ul>
+      <div class="st">6 agents in parallel:</div>
+      <ul style="font-size:5.8pt;"><li>1. Spelling &amp; grammar</li><li>2. Internal consistency</li><li>3. Unsupported claims</li><li>4. Mathematics &amp; notation</li><li>5. Tables &amp; figures</li><li>6. Contribution referee (adv.)</li></ul>
+      <div class="st">Deterministic decision:</div>
+      <ul style="font-size:5.8pt;"><li>avg&ge;75 no fatal &rarr; ACCEPT</li><li>&ge;60 &rarr; MINOR (no re-review)</li><li>40&ndash;60 &rarr; MAJOR (R&amp;R loop)</li><li>&lt;40+fatal &rarr; REJECT</li></ul>
     </div>
     <div class="ch">
       <div class="ch-l">After R&amp;R, user chooses:</div>
@@ -343,25 +373,24 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
       <span class="p p-al">[2] Manual fix &rarr; re-review</span><br>
       <span class="p p-no">[3] Restart from Stage 3.7 &#8634;</span>
     </div>
-    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">2 reports + editorial decision</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">paper/main.tex (PDF)</div></div>
-    <div class="tg-r"><span class="tg tg-p">Auto + evidence + user choice</span></div>
+    <div class="io"><div class="io-l out">&darr; Output</div><div class="io-v">6 reports + editorial decision</div><div class="io-l in" style="margin-top:2px">&uarr; Input</div><div class="io-v">paper/main.tex (PDF)</div></div>
+    <div class="tg-r"><span class="tg tg-p">Auto + user choice</span></div>
   </div>
 
   <div class="arrow-conn"><div class="shaft"></div><div class="artifact">Accepted<br>paper</div></div>
 
-  <!-- 7 -->
+  <!-- Stage 7 -->
   <div class="card blue">
     <div class="card-h"><div class="badge">7</div><div><div class="card-t">Submission</div><div class="card-st">orchestrator + verifier</div></div></div>
     <div class="card-b">
       <div class="st">7a. Replication Audit</div>
-      <ul><li>Re-run scripts, compare hashes</li></ul>
+      <ul><li>Re-run scripts, MD5 hashes</li></ul>
       <div class="st">7b. Integration Validation</div>
       <ul><li>Strategy&rarr;Code&rarr;Paper checks</li></ul>
       <div class="st">7c. Quality Gate</div>
       <ul><li>Aggregate &ge;85, each &ge;70</li><li style="font-size:5pt;color:#64748B;">ID 30% Code 20% Paper 25% Polish 15% Repl 10%</li></ul>
-      <div class="st">7d. Journal Targeting (instant)</div>
+      <div class="st">7d. Journal Targeting</div>
       <div class="st">7e. Feedback PDF (radar chart)</div>
-      <ul><li>Dynamic score recalculation</li></ul>
       <div class="sp"></div>
       <div style="font-weight:600;">User: Accept or Improve (max 3)</div>
     </div>
@@ -369,20 +398,20 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: 
     <div class="tg-r"><span class="tg tg-g">Final gate &ge; 85</span></div>
   </div>
 
-  <!-- Arrow to output -->
+  <!-- Final output -->
   <div class="arrow-conn"><div class="shaft"></div></div>
   <div class="out-node"><div class="out-bbl">Academic<br>Paper<br>(PDF)</div></div>
 </div>
 
 <!-- Loop: R&R Stage 6 -> 5 -->
-<div class="loop-row" style="padding: 0 50% 0 8%;">
+<div class="loop-row" style="padding: 0 50% 0 18%;">
   <div class="loop-up-r"></div>
   <div class="loop-line"><div class="loop-label">MAJOR_REVISIONS &rarr; R&amp;R loop (max 3 rounds)</div></div>
   <div class="loop-up-l"></div>
 </div>
 
 <!-- Loop: Restart 6 -> 3.7 -->
-<div class="loop-row" style="padding: 0 50% 0 3%;">
+<div class="loop-row" style="padding: 0 50% 0 8%;">
   <div class="loop-up-r"></div>
   <div class="loop-line"><div class="loop-label">User [3]: Restart from Stage 3.7 (Page 2) &mdash; rebuild code + paper</div></div>
   <div class="loop-up-l"></div>
