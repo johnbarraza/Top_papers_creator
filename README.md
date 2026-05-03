@@ -30,9 +30,11 @@ The pipeline is built on top of the [Claude Code](https://claude.ai/code) CLI an
 ## Installation
 
 **Requirements:**
+
+- **[Claude Max subscription](https://www.anthropic.com/pricing)** — the pipeline routes every LLM call through your authenticated Claude session. A pay-per-token Anthropic API key is **not** sufficient: Stages 2, 3, 4, 5, and 6 launch multi-turn conversations and parallel agents whose volume only fits within the Max plan's quotas.
+- **[Google Antigravity](https://antigravity.google/)** — the pipeline is designed to run inside Antigravity's agentic IDE, which hosts the Claude Code session, the long-running terminal context required for Stages 4 and 5 (manual intervention), and the file system access used by the Python orchestrator.
 - Python 3.11+ (tested on 3.14 on Windows)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI authenticated and on `PATH`
-- LaTeX distribution with `pdflatex` on `PATH` (TeX Live, MiKTeX)
+- LaTeX distribution with `pdflatex` on `PATH` (TeX Live or MiKTeX)
 - Standard Python packages: `pandas`, `numpy`, `requests` (imported ad-hoc — install on first run)
 
 **Setup:**
@@ -43,7 +45,7 @@ cd Top_papers_creator
 pip install pandas numpy requests
 ```
 
-No API keys required. The pipeline uses free public APIs (Dataverse, Zenodo, GitHub, Semantic Scholar) and routes all LLM calls through your authenticated Claude Code session.
+Open the cloned folder inside Google Antigravity, sign in with the Google account linked to your Claude Max subscription, and run the pipeline from Antigravity's integrated terminal. All LLM calls flow through the authenticated session — no Anthropic API key is required. The pipeline also uses free public APIs (Dataverse, Zenodo, GitHub, Semantic Scholar) for dataset discovery and literature review.
 
 
 ## Usage
