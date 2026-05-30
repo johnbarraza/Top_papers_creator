@@ -12,6 +12,7 @@ from ..config import get_profile
 from ..claude_runner import run_claude
 from ..json_utils import extract_json
 from ..state import save_state
+from ..paper_searcher import PaperSearcher, is_paperdl_available, PAPERDL_SOURCES, _resolve_paperdl_mode
 
 
 def run(project_dir: Path, state: dict) -> dict:
@@ -115,8 +116,23 @@ def _data_source_to_replication_candidate(ds: dict) -> dict | None:
     }
 
 
+def _resolve_mode(state: dict) -> str:
+    """Resolve paperdl mode: state config → config.py → env → 'auto'."""
+    mode = state.get("config", {}).get("paperdl", "")
+    if mode in ("auto", "on", "off"):
+        return mode
+    return _resolve_paperdl_mode()
+
+
 def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict]:
-    """Merge Stage 1 seed papers, replication packages, and a fresh S2 search."""
+    """Merge Stage 1 seed papers, replication packages, and multi-source search.
+
+    Search order:
+      1. Stage 1 seed papers (already found in discovery)
+      2. Replication packages from data sources
+      3. paperdl search (arXiv, OpenReview, PMLR, etc.) — if mode allows
+      4. Semantic Scholar API (always available as fallback)
+    """
     stage1 = state["stages"].get("stage1", {})
     papers = list(stage1.get("seed_papers", []) or [])
 
@@ -134,6 +150,21 @@ def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict
             papers.append(p)
 
     topic = stage1.get("selected_variant") or stage1.get("topic", "")
+    mode = _resolve_mode(state)
+
+    # ── paperdl search (multi-source: arXiv, PMLR, PMC) ──
+    if topic and mode != "off" and is_paperdl_available():
+        try:
+            econ_sources = ["arxiv", "pmlr", "pmc"]
+            searcher = PaperSearcher(sources=econ_sources, mode=mode)
+            paperdl_results = searcher.search(topic, max_results=10)
+            print(f"  [paperdl] Found {len(paperdl_results)} replication candidates")
+            for pi in paperdl_results:
+                papers.append(pi.to_pipeline_dict())
+        except Exception as exc:
+            print(f"  [paperdl] Replication candidate search failed: {exc}")
+
+    # ── Semantic Scholar fallback ──
     if topic:
         papers.extend(_search_semantic_scholar_for_replication(topic, max_results=8))
 
@@ -185,12 +216,36 @@ def _display_and_choose_paper(papers: list[dict]) -> dict:
         print("  Enter a valid candidate number.")
 
 
-def _fetch_paper_content(paper: dict, project_dir: Path) -> dict:
-    """Fetch OA PDF when available; otherwise return abstract/metadata."""
+def _fetch_paper_content(paper: dict, project_dir: Path, mode: str = "auto") -> dict:
+    """Fetch paper PDF via paperdl + direct URL + Semantic Scholar fallback.
+
+    Uses PaperSearcher.download() which tries:
+      1. paperdl source-specific download (if paper is from arXiv, PMLR, etc.)
+      2. Direct OA PDF URL download
+      3. Semantic Scholar OA PDF
+    """
+    papers_dir = project_dir / "papers"
+    papers_dir.mkdir(exist_ok=True)
+
+    # ── Try PaperSearcher (paperdl + direct + SS fallback) ──
+    if mode != "off":
+        try:
+            searcher = PaperSearcher(mode=mode)
+            local_path = searcher.download(paper, str(papers_dir))
+            if local_path:
+                print(f"  [paper] Downloaded via PaperSearcher: {Path(local_path).name}")
+                return {
+                    "source": "pdf",
+                    "local_path": local_path,
+                    "url": paper.get("url", ""),
+                    "text_excerpt": paper.get("abstract", ""),
+                }
+        except Exception as exc:
+            print(f"  [paper] PaperSearcher download failed: {exc}")
+
+    # ── Fallback: direct OA PDF URL ──
     pdf_url = (paper.get("openAccessPdf") or {}).get("url")
     if pdf_url:
-        papers_dir = project_dir / "papers"
-        papers_dir.mkdir(exist_ok=True)
         try:
             import re
             import requests
@@ -314,9 +369,10 @@ def _run_replication_mode(project_dir: Path, state: dict) -> dict:
     """Generate replication/HTE extension ideas while preserving Stage 2 schema."""
     stage1 = state["stages"].get("stage1", {})
     topic = stage1.get("topic", "academic research")
+    mode = _resolve_mode(state)
     candidates = _collect_replication_candidates(project_dir, state)
     chosen_paper = _display_and_choose_paper(candidates)
-    paper_content = _fetch_paper_content(chosen_paper, project_dir)
+    paper_content = _fetch_paper_content(chosen_paper, project_dir, mode=mode)
     data_context = _replication_data_context(state)
 
     prompt = f"""You are a rigorous empirical research advisor.
@@ -1081,4 +1137,15 @@ IMPORTANT: At the end, output a JSON block:
 
     state["current_stage"] = 2
     save_state(project_dir, state)
+
+    # ── NotebookLM checkpoint (optional, human-confirmed) ──────────────────
+    try:
+        from ..notebooklm_hooks import stage2_notebooklm_checkpoint
+        stage1 = state["stages"].get("stage1", {})
+        topic = stage1.get("topic", "academic research")
+        top_ideas = state["stages"]["stage2"].get("top_ideas", [])
+        stage2_notebooklm_checkpoint(project_dir, state, topic, top_ideas)
+    except Exception:
+        pass
+
     return state

@@ -218,6 +218,20 @@ def _search_semantic_scholar_seed_papers(topic: str, max_results: int = 10) -> l
         return []
 
 
+def _resolve_paperdl_mode(state: dict | None = None) -> str:
+    """Resolve paperdl mode: state config → config.py → env → 'auto'."""
+    if state:
+        mode = state.get("config", {}).get("paperdl", "")
+        if mode in ("auto", "on", "off"):
+            return mode
+    try:
+        from ..paper_searcher import _resolve_paperdl_mode as _rm
+        return _rm()
+    except ImportError:
+        import os
+        return os.environ.get("PIPELINE_PAPERDL", "auto")
+
+
 def _candidate_to_seed_paper(candidate: dict) -> dict | None:
     """Convert a dataset/replication-package candidate into a paper-like record."""
     source = (candidate.get("source_api") or "").lower()
@@ -262,6 +276,42 @@ def _dedupe_seed_papers(papers: list[dict]) -> list[dict]:
         seen.add(key)
         deduped.append(p)
     return deduped
+
+
+def _search_paperdl_seed_papers(topic: str, max_results: int = 10,
+                                mode: str = "auto") -> list[dict]:
+    """Search paperdl (arXiv, OpenReview, PMLR, PMC) for seed papers.
+
+    Respects paperdl mode: "auto" (use if installed), "on" (require), "off" (skip).
+    Falls back gracefully if paperdl unavailable and mode is "auto".
+    """
+    if mode == "off":
+        return []
+
+    try:
+        from ..paper_searcher import PaperSearcher, is_paperdl_available
+    except ImportError:
+        return []
+
+    if not is_paperdl_available():
+        if mode == "on":
+            print("  [paperdl] Mode is 'on' but paperdl not installed. "
+                  "Install with: pip install paperdl")
+        return []
+
+    print(f"  [paperdl] Searching seed papers for '{topic}'...")
+    try:
+        econ_sources = ["arxiv", "pmlr", "pmc"]
+        searcher = PaperSearcher(sources=econ_sources, mode=mode)
+        results = searcher.search(topic, max_results=max_results)
+        papers = []
+        for pi in results:
+            papers.append(pi.to_pipeline_dict())
+        print(f"  [paperdl] Found {len(papers)} seed papers")
+        return papers
+    except Exception as e:
+        print(f"  [paperdl] Error: {e}")
+        return []
 
 
 def _search_dbnomics(topic: str, max_results: int = 5) -> list[dict]:
@@ -3429,8 +3479,12 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
         })
 
     seed_papers = []
+    paperdl_mode = _resolve_paperdl_mode(state)
+    # paperdl (arXiv, OpenReview, PMLR, PMC) — richer metadata than SS alone
+    seed_papers.extend(_search_paperdl_seed_papers(selected["variant"], max_results=8, mode=paperdl_mode))
     seed_papers.extend(_search_semantic_scholar_seed_papers(selected["variant"], max_results=8))
     if selected["variant"] != topic:
+        seed_papers.extend(_search_paperdl_seed_papers(topic, max_results=5, mode=paperdl_mode))
         seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=5))
     for c in selected.get("candidates", []):
         p = _candidate_to_seed_paper(c)
@@ -4061,7 +4115,10 @@ Select the TOP 3 and return ONLY a JSON block:
     if papers_data and "seed_papers" in papers_data:
         state["stages"]["stage1"]["seed_papers"] = papers_data.get("seed_papers", [])
     elif not data_path:
-        seed_papers = _search_semantic_scholar_seed_papers(topic, max_results=8)
+        paperdl_mode = _resolve_paperdl_mode(state)
+        seed_papers = _search_paperdl_seed_papers(topic, max_results=8, mode=paperdl_mode)
+        seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=8))
+        seed_papers = _dedupe_seed_papers(seed_papers)
         state["stages"]["stage1"]["seed_papers"] = seed_papers
 
     if not papers_data:
@@ -4119,4 +4176,13 @@ Select the TOP 3 and return ONLY a JSON block:
 
     state["current_stage"] = 1
     save_state(project_dir, state)
+
+    # ── NotebookLM checkpoint (optional, human-confirmed) ──────────────────
+    try:
+        from ..notebooklm_hooks import stage1_notebooklm_checkpoint
+        seed_papers = state["stages"]["stage1"].get("seed_papers", [])
+        stage1_notebooklm_checkpoint(project_dir, state, topic, seed_papers)
+    except Exception:
+        pass
+
     return state

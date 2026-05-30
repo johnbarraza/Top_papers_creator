@@ -29,9 +29,23 @@ REJECT_FLOOR        = 40     # avg < 40 with fatal issues -> REJECT
 # Backwards compatibility aliases
 MAX_EVAL_LOOPS = MAX_STAGE3_PIVOTS
 
+# ── paperdl integration ──────────────────────────────────────────────────────
+# "auto": use paperdl if installed, fall back to Semantic Scholar
+# "on":   require paperdl — fail loudly if not installed
+# "off":  skip paperdl entirely, use only Semantic Scholar
+# Can be overridden via env: PIPELINE_PAPERDL=on|off|auto
+import os
+PAPERDL_MODE = os.environ.get("PIPELINE_PAPERDL", "auto")
+
+# ── NotebookLM integration ───────────────────────────────────────────────────
+# "auto": offer NotebookLM at checkpoints, require human confirmation
+# "on":   same as auto, but fail if notebooklm-py not installed/logged in
+# "off":  skip NotebookLM entirely
+# Can be overridden via env: PIPELINE_NOTEBOOKLM=on|off|auto
+NOTEBOOKLM_MODE = os.environ.get("PIPELINE_NOTEBOOKLM", "auto")
+
 # ── Claude Code CLI defaults ─────────────────────────────────────────────────
 # No API key needed — uses `claude -p` (headless mode) via subprocess.
-import os
 CLAUDE_TIMEOUT      = int(os.environ.get("PIPELINE_CLAUDE_TIMEOUT", 600))
 PYTHON_TIMEOUT      = int(os.environ.get("PIPELINE_PYTHON_TIMEOUT", 600))
 MAX_PARALLEL_AGENTS = int(os.environ.get("PIPELINE_MAX_PARALLEL", 2))

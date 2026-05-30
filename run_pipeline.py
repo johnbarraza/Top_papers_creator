@@ -97,6 +97,10 @@ def main():
                         help="Stop after a specific stage (default: 7)")
     parser.add_argument("--mode", choices=["new", "replicate", "ask"], default="ask",
                         help="Stage 2 mode: new ideas, replication/HTE, or ask interactively")
+    parser.add_argument("--paperdl", choices=["auto", "on", "off"], default="auto",
+                        help="paperdl integration: auto (if installed), on (require), off (skip)")
+    parser.add_argument("--notebooklm", choices=["auto", "on", "off"], default="auto",
+                        help="NotebookLM integration: auto (offer at checkpoints), on (require), off (skip)")
     parser.add_argument("--status", type=str, metavar="PROJECT",
                         help="Show status of a project")
 
@@ -210,6 +214,8 @@ def main():
     if args.path_c:
         state["path_c"] = True
     state.setdefault("config", {})["stage2_mode"] = args.mode
+    state.setdefault("config", {})["paperdl"] = args.paperdl
+    state.setdefault("config", {})["notebooklm"] = args.notebooklm
 
     print(f"Project: {project_name}")
     print(f"Directory: {project_dir}")
