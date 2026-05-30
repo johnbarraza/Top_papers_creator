@@ -121,7 +121,13 @@ def detect_design(idea: dict) -> str:
     """Detect the research design from the idea metadata."""
     method = (idea.get("method", "") + " " + idea.get("identification_source", "")).lower()
 
-    if any(k in method for k in ["rdd", "discontinuity", "threshold", "cutoff"]):
+    if any(k in method for k in [
+        "dml", "double machine", "debiased machine", "causal forest",
+        "generalized random forest", "grf", "causal tree", "cate",
+        "heterogeneous treatment",
+    ]):
+        return "hte"
+    elif any(k in method for k in ["rdd", "discontinuity", "threshold", "cutoff"]):
         return "rdd"
     elif any(k in method for k in ["stagger", "callaway", "did", "diff-in-diff", "event study"]):
         return "did"

@@ -463,6 +463,29 @@ def run(project_dir: Path, state: dict) -> dict:
         selected_idea = state["stages"].get("stage2_5", {}).get("selected_idea", {})
         design_type = detect_design(selected_idea)
         template_instruction = ""
+        hte_instruction = ""
+
+        if design_type == "hte" or state["stages"].get("stage2", {}).get("mode") == "replication":
+            hte_instruction = (
+                "\n\n*** REPLICATION + HTE SCRIPT CONTRACT ***\n"
+                "Use the existing four-script contract. Do NOT create 1_load.py, "
+                "2_clean.py, 3_replicate.py, etc. Generate or fill exactly:\n"
+                "  00_clean.py       - load data, apply original-paper sample restrictions, "
+                "construct treatment/outcome/covariates, save clean_data.csv\n"
+                "  01_main.py        - replicate baseline ATE first, then estimate DML/CATE\n"
+                "  02_robustness.py  - overlap diagnostics, learner sensitivity, placebo checks, "
+                "alternative covariate sets\n"
+                "  03_output.py      - LaTeX tables and figures for replication ATE, DML ATE, "
+                "CATE summaries, and robustness\n\n"
+                "Mandatory gate: 01_main.py MUST compute a baseline replication estimate before "
+                "any HTE result. If the selected paper reports a numeric ATE and the replicated "
+                "estimate differs by more than 30%, write a clear WARNING to results_summary.md "
+                "and explain likely sample/specification causes. If no reported ATE is available, "
+                "write replication_target_unavailable and continue.\n\n"
+                "Use econml/sklearn only if available or listed in requirements.txt. If econml is "
+                "unavailable, implement a transparent fallback: OLS with pre-specified interactions "
+                "and honest train/test split for exploratory heterogeneity.\n"
+            )
 
         if design_type in AVAILABLE_DESIGNS:
             templates = get_all_templates(design_type)
@@ -631,6 +654,7 @@ def run(project_dir: Path, state: dict) -> dict:
                 "      primary dependent variables, not arbitrarily named columns.\n"
                 + estimator_guidance
                 + checklist_musts
+                + hte_instruction
                 + template_instruction
                 + data_preview
             ),

@@ -19,6 +19,9 @@ CAUSAL_METHODS = {
     "arellano-bond", "arellano bond", "dynamic panel", "gmm",
     "synth", "synthetic control",
     "bunching", "bunching estimator",
+    "debiased machine learning", "double machine learning", "double ml",
+    "doubleml", "dml", "causal forest", "generalized random forest",
+    "grf", "causal tree", "cate", "heterogeneous treatment",
 }
 
 PANEL_METHODS = {
@@ -164,6 +167,33 @@ def _design_template_for_method(method: str) -> dict:
                 "Balance F-test (joint orthogonality of covariates to treatment)",
                 "Differential attrition test",
                 "Lee bounds for worst-case selective attrition",
+            ],
+        }
+    if any(k in m for k in [
+        "dml", "double machine", "debiased machine", "causal forest",
+        "generalized random forest", "grf", "causal tree", "cate",
+        "heterogeneous treatment",
+    ]):
+        return {
+            "model": (
+                "Replication + HTE:\n"
+                "        Step 1: reproduce original ATE / baseline estimand\n"
+                "        Step 2: estimate nuisance functions E[Y|X], E[D|X]\n"
+                "        Step 3: cross-fit orthogonal score for ATE/CATE\n"
+                "        Step 4: summarize CATE heterogeneity across pre-treatment X"
+            ),
+            "exec_steps": [
+                "1. Reconstruct the original sample restrictions and baseline ATE",
+                "2. Define treatment, outcome, controls, and HTE covariates before estimation",
+                "3. Run DML or causal forest with cross-fitting / honest splitting",
+                "4. Compare replicated ATE against the paper's reported estimate if available",
+                "5. Report CATE distribution and top heterogeneity splits with uncertainty",
+            ],
+            "key_tests": [
+                "Baseline ATE replication before any HTE claims",
+                "Overlap / propensity diagnostics",
+                "Sensitivity to nuisance learners and covariate sets",
+                "No post-treatment variables in HTE covariates",
             ],
         }
     # Default / panel FE / observational

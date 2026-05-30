@@ -1,1 +1,9 @@
 .env
+
+# Private local notes / decisions — never tracked
+.me/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyc.*

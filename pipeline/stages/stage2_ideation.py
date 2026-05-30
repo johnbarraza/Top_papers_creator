@@ -3,6 +3,8 @@
 Generates 8-10 research ideas from seed papers, scores them, and selects the top 3.
 """
 
+import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +15,402 @@ from ..state import save_state
 
 
 def run(project_dir: Path, state: dict) -> dict:
+    """Execute Stage 2 in normal ideation or replication/HTE mode."""
+    mode = _resolve_stage2_mode(state)
+    if mode == "replication":
+        return _run_replication_mode(project_dir, state)
+    return _run_ideation_normal(project_dir, state)
+
+
+def _resolve_stage2_mode(state: dict) -> str:
+    """Resolve the Stage 2 mode while keeping non-interactive runs safe."""
+    requested = state.get("config", {}).get("stage2_mode", "ask")
+    if requested == "new":
+        return "normal"
+    if requested == "replicate":
+        return "replication"
+    if requested != "ask" or not sys.stdin.isatty():
+        return "normal"
+
+    print("\n  What do you want Stage 2 to generate?")
+    print("  [N] New research ideas (default)")
+    print("  [R] Replicate/extend an existing paper with HTE")
+    while True:
+        choice = input("  Choose [N/R]: ").strip().upper()
+        if not choice or choice == "N":
+            return "normal"
+        if choice == "R":
+            return "replication"
+        print("  Please enter N or R.")
+
+
+def _search_semantic_scholar_for_replication(topic: str, max_results: int = 10) -> list[dict]:
+    """Search Semantic Scholar with full fields needed by replication mode."""
+    try:
+        import requests
+        r = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": topic,
+                "limit": max_results,
+                "fields": (
+                    "title,authors,year,venue,citationCount,abstract,"
+                    "url,openAccessPdf,externalIds"
+                ),
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        results = []
+        for p in r.json().get("data", []) or []:
+            title = (p.get("title") or "").strip()
+            if not title:
+                continue
+            authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
+            if len(p.get("authors") or []) > 3:
+                authors += " et al."
+            results.append({
+                "title": title,
+                "authors": authors,
+                "year": p.get("year"),
+                "venue": p.get("venue", ""),
+                "citationCount": p.get("citationCount", 0),
+                "abstract": p.get("abstract") or "",
+                "url": p.get("url") or "",
+                "openAccessPdf": p.get("openAccessPdf") or {},
+                "externalIds": p.get("externalIds") or {},
+                "source": "semantic_scholar",
+            })
+        return results
+    except Exception as e:
+        print(f"  [semantic-scholar] Replication search failed: {e}")
+        return []
+
+
+def _data_source_to_replication_candidate(ds: dict) -> dict | None:
+    """Convert a Stage 1 data source into a selectable paper candidate."""
+    source = (ds.get("source_api") or "").lower()
+    text = " ".join([
+        str(ds.get("name", "")),
+        str(ds.get("provider", "")),
+        str(ds.get("description", "")),
+        str(ds.get("url", "")),
+        source,
+    ]).lower()
+    if source not in {"github", "journal", "dataverse"} and "replication" not in text:
+        return None
+    return {
+        "title": ds.get("name", "Untitled replication package"),
+        "authors": "",
+        "year": str(ds.get("published", ""))[:4] or None,
+        "venue": ds.get("provider", ""),
+        "citationCount": 0,
+        "abstract": ds.get("description", ""),
+        "url": ds.get("url", ""),
+        "openAccessPdf": {},
+        "externalIds": {},
+        "source": "replication_package",
+        "replication_package_url": ds.get("url", ""),
+        "dataset_candidate": ds,
+    }
+
+
+def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict]:
+    """Merge Stage 1 seed papers, replication packages, and a fresh S2 search."""
+    stage1 = state["stages"].get("stage1", {})
+    papers = list(stage1.get("seed_papers", []) or [])
+
+    discovery_file = project_dir / "stage1_discovery.md"
+    if not papers and discovery_file.exists():
+        try:
+            parsed = json.loads(discovery_file.read_text(encoding="utf-8"))
+            papers.extend(parsed.get("seed_papers", []) or [])
+        except Exception:
+            pass
+
+    for ds in stage1.get("recommended_data_sources", []) or []:
+        p = _data_source_to_replication_candidate(ds)
+        if p:
+            papers.append(p)
+
+    topic = stage1.get("selected_variant") or stage1.get("topic", "")
+    if topic:
+        papers.extend(_search_semantic_scholar_for_replication(topic, max_results=8))
+
+    seen = set()
+    deduped = []
+    for paper in papers:
+        key = (paper.get("title") or paper.get("url") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(paper)
+    return deduped
+
+
+def _display_and_choose_paper(papers: list[dict]) -> dict:
+    """Show candidate papers and return the selected one."""
+    if not papers:
+        return {
+            "title": "User topic replication target",
+            "authors": "",
+            "year": None,
+            "venue": "",
+            "citationCount": 0,
+            "abstract": "",
+            "url": "",
+            "openAccessPdf": {},
+            "source": "fallback",
+        }
+
+    print("\n  Replication candidates:")
+    for i, p in enumerate(papers[:10], 1):
+        authors = p.get("authors") or "Unknown authors"
+        year = p.get("year") or "n.d."
+        cites = p.get("citationCount", p.get("citations", 0))
+        title = p.get("title", "Untitled")
+        print(f"  [{i}] {title[:95]}")
+        print(f"      {authors} ({year}) | citations: {cites} | {p.get('source', '?')}")
+
+    if not sys.stdin.isatty():
+        print("  [replication] Non-interactive run: selecting candidate 1.")
+        return papers[0]
+
+    while True:
+        choice = input("\n  Select paper number [1]: ").strip()
+        if not choice:
+            return papers[0]
+        if choice.isdigit() and 1 <= int(choice) <= min(len(papers), 10):
+            return papers[int(choice) - 1]
+        print("  Enter a valid candidate number.")
+
+
+def _fetch_paper_content(paper: dict, project_dir: Path) -> dict:
+    """Fetch OA PDF when available; otherwise return abstract/metadata."""
+    pdf_url = (paper.get("openAccessPdf") or {}).get("url")
+    if pdf_url:
+        papers_dir = project_dir / "papers"
+        papers_dir.mkdir(exist_ok=True)
+        try:
+            import re
+            import requests
+            safe_title = re.sub(r"[^A-Za-z0-9_.-]+", "_", paper.get("title", "paper"))[:80]
+            pdf_path = papers_dir / f"{safe_title}.pdf"
+            r = requests.get(pdf_url, timeout=30)
+            r.raise_for_status()
+            pdf_path.write_bytes(r.content)
+            return {
+                "source": "pdf",
+                "local_path": str(pdf_path),
+                "url": pdf_url,
+                "text_excerpt": paper.get("abstract", ""),
+            }
+        except Exception as e:
+            print(f"  [paper] Could not download OA PDF: {e}")
+
+    abstract = paper.get("abstract") or ""
+    return {
+        "source": "abstract" if abstract else "metadata",
+        "local_path": "",
+        "url": paper.get("url", ""),
+        "text_excerpt": abstract or json.dumps(paper, ensure_ascii=False)[:1500],
+    }
+
+
+def _replication_data_context(state: dict) -> str:
+    """Build compact dataset context for the replication-mode prompt."""
+    stage1_5 = state["stages"].get("stage1_5", {})
+    downloaded = stage1_5.get("downloaded_datasets", []) or []
+    if not downloaded:
+        sources = state["stages"].get("stage1", {}).get("recommended_data_sources", []) or []
+        lines = ["No downloaded dataset profile is available. Candidate data sources:"]
+        for ds in sources[:5]:
+            lines.append(f"- {ds.get('name', '?')} ({ds.get('provider', '?')}): {ds.get('url', '')}")
+        return "\n".join(lines)
+
+    lines = ["Downloaded datasets available for replication/HTE:"]
+    for i, ds in enumerate(downloaded[:3], 1):
+        profile = ds.get("profile", {}) or {}
+        cols = profile.get("columns", []) or []
+        lines.append(f"\nDataset {i}: {ds.get('name', '?')}")
+        lines.append(f"- File: {ds.get('local_path', '?')}")
+        lines.append(f"- Rows: {profile.get('rows', '?')}, columns: {profile.get('cols', '?')}")
+        lines.append(f"- Structure: {profile.get('structure', '?')}")
+        if cols:
+            lines.append(f"- Variables sample: {', '.join(cols[:80])}")
+    return "\n".join(lines)
+
+
+def _fallback_replication_ideas(chosen_paper: dict, state: dict) -> list[dict]:
+    """Provide schema-valid ideas if the LLM response cannot be parsed."""
+    title = chosen_paper.get("title", "selected paper")
+    data_sources = [
+        ds.get("name", "available dataset")
+        for ds in state["stages"].get("stage1", {}).get("recommended_data_sources", [])[:2]
+    ] or ["available Stage 1 dataset"]
+    base = {
+        "identification_level": "B",
+        "identification_source": "Replicate the original estimand before estimating heterogeneity.",
+        "sub_topic": "replication_hte",
+        "data_sources": data_sources,
+        "novelty": 3,
+        "feasibility": 3,
+        "impact": 4,
+        "identification": 3,
+        "expected_effect": 3,
+        "total_score": 3.2,
+        "first_experiment": "Reproduce the original ATE on the available sample, then run HTE only if the baseline estimate is credible.",
+    }
+    return [
+        {
+            **base,
+            "rank": 1,
+            "title": f"[REPLICATE] Reproduce the baseline result in {title}",
+            "research_question": f"Can the main empirical result in '{title}' be reproduced with the available data?",
+            "method": "Original-paper replication with transparent sample construction",
+            "pitch": "Start by matching the original estimand, sample restrictions, and baseline specification.",
+            "replication": {
+                "base_paper_title": title,
+                "extension_type": "REPLICATE",
+                "original_estimand": "ATE from the selected paper",
+                "replication_target": "Baseline coefficient from the selected paper",
+                "hte_variables": [],
+            },
+        },
+        {
+            **base,
+            "rank": 2,
+            "title": f"[HTE-DML] Estimate heterogeneous effects extending {title}",
+            "research_question": f"Which observable groups have larger or smaller treatment effects than the average effect in '{title}'?",
+            "method": "Double/debiased machine learning with cross-fitting",
+            "pitch": "Use DML to estimate the ATE robustly, then inspect CATE patterns across pre-treatment covariates.",
+            "replication": {
+                "base_paper_title": title,
+                "extension_type": "HTE-DML",
+                "original_estimand": "ATE from the selected paper",
+                "replication_target": "Baseline ATE before HTE",
+                "hte_variables": ["pre-treatment covariates"],
+            },
+        },
+        {
+            **base,
+            "rank": 3,
+            "title": f"[HTE-CF] Causal forest extension of {title}",
+            "research_question": f"Can causal forests reveal policy-relevant treatment effect heterogeneity in '{title}'?",
+            "method": "Causal forest / generalized random forest for CATE estimation",
+            "pitch": "Estimate CATEs, validate overlap, and summarize the strongest heterogeneity splits.",
+            "replication": {
+                "base_paper_title": title,
+                "extension_type": "HTE-CF",
+                "original_estimand": "ATE from the selected paper",
+                "replication_target": "Baseline ATE before CATE",
+                "hte_variables": ["demographics", "geography", "baseline outcomes"],
+            },
+        },
+    ]
+
+
+def _run_replication_mode(project_dir: Path, state: dict) -> dict:
+    """Generate replication/HTE extension ideas while preserving Stage 2 schema."""
+    stage1 = state["stages"].get("stage1", {})
+    topic = stage1.get("topic", "academic research")
+    candidates = _collect_replication_candidates(project_dir, state)
+    chosen_paper = _display_and_choose_paper(candidates)
+    paper_content = _fetch_paper_content(chosen_paper, project_dir)
+    data_context = _replication_data_context(state)
+
+    prompt = f"""You are a rigorous empirical research advisor.
+
+The user wants to replicate or extend an existing paper with heterogeneous
+treatment effect methods.
+
+TOPIC:
+{topic}
+
+SELECTED PAPER:
+Title: {chosen_paper.get('title', 'N/A')}
+Authors: {chosen_paper.get('authors', 'N/A')}
+Year: {chosen_paper.get('year', 'N/A')}
+Venue: {chosen_paper.get('venue', 'N/A')}
+URL: {chosen_paper.get('url', 'N/A')}
+Abstract/metadata:
+{paper_content.get('text_excerpt', '')[:6000]}
+
+AVAILABLE DATA:
+{data_context}
+
+Generate 5-8 replication or extension angles. Each angle must be a complete
+Stage 2 idea compatible with the existing pipeline. Prefer angles that first
+replicate the original ATE, then extend to HTE only if the data can support it.
+
+Allowed extension types:
+- REPLICATE
+- HTE-DML
+- HTE-CF
+- HTE-CT
+- EXTEND-T
+- EXTEND-Y
+- EXTEND-X
+
+Return ONLY a JSON block:
+```json
+{{
+  "top_ideas": [
+    {{
+      "rank": 1,
+      "title": "[HTE-DML] ...",
+      "research_question": "...",
+      "method": "Double/debiased machine learning with cross-fitting",
+      "identification_level": "A|B|C",
+      "identification_source": "...",
+      "sub_topic": "replication_hte",
+      "data_sources": ["..."],
+      "novelty": 3,
+      "feasibility": 4,
+      "impact": 4,
+      "identification": 4,
+      "expected_effect": 3,
+      "total_score": 3.6,
+      "pitch": "...",
+      "first_experiment": "Replicate original ATE before estimating CATE.",
+      "replication": {{
+        "base_paper_title": "{chosen_paper.get('title', '')}",
+        "extension_type": "HTE-DML",
+        "original_estimand": "...",
+        "replication_target": "...",
+        "hte_variables": ["..."]
+      }}
+    }}
+  ]
+}}
+```
+"""
+    output_file = project_dir / "stage2_ideation.md"
+    p = get_profile("stage2")
+    response = run_claude(prompt, model=p["model"], effort=p["effort"], output_file=output_file)
+    parsed = extract_json(response)
+    top_ideas = parsed.get("top_ideas") if isinstance(parsed, dict) else None
+    if not top_ideas:
+        print("  [warn] Could not parse replication ideas. Using schema-valid fallback ideas.")
+        top_ideas = _fallback_replication_ideas(chosen_paper, state)
+
+    state["stages"]["stage2"] = {
+        "status": "completed",
+        "mode": "replication",
+        "chosen_paper": chosen_paper,
+        "paper_content": paper_content,
+        "top_ideas": top_ideas,
+        "extension_angles": top_ideas,
+        "output_file": str(output_file),
+        "completed_at": datetime.now().isoformat(),
+    }
+    state["current_stage"] = 2
+    save_state(project_dir, state)
+    print(f"  [ok] Generated {len(top_ideas)} replication/HTE ideas")
+    return state
+
+
+def _run_ideation_normal(project_dir: Path, state: dict) -> dict:
     """Execute Stage 2: idea generation."""
     stage1 = state["stages"].get("stage1", {})
     topic = stage1.get("topic", "academic research")

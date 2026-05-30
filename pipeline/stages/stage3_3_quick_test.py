@@ -1214,6 +1214,27 @@ Be CONSERVATIVE: only flag CRITICAL if the analysis truly cannot be done.
     except ImportError:
         available_estimators["csdid"] = False
 
+    # Check HTE stack
+    try:
+        import sklearn  # noqa: F401
+        available_estimators["sklearn"] = True
+        print("  [3.3]   sklearn: installed")
+    except ImportError:
+        available_estimators["sklearn"] = False
+        print("  [3.3]   sklearn: NOT INSTALLED")
+
+    try:
+        import econml  # noqa: F401
+        available_estimators["econml"] = True
+        print("  [3.3]   econml: installed")
+    except ImportError:
+        available_estimators["econml"] = False
+        if design == "hte":
+            estimator_warnings.append(
+                "econml is not installed; HTE scripts must add requirements.txt or use OLS-interaction fallback"
+            )
+        print("  [3.3]   econml: NOT INSTALLED")
+
     # Summary
     working = [k for k, v in available_estimators.items() if v]
     broken = [k for k, v in available_estimators.items() if not v and k != "csdid"]

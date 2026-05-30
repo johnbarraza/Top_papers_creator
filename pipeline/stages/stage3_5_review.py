@@ -1113,7 +1113,13 @@ def run(project_dir: Path, state: dict) -> dict:
     # ══════════════════════════════════════════════════════════════════════
     # PHASE 1: DATA SOURCE SELECTION
     # ══════════════════════════════════════════════════════════════════════
+    # Path B sets stage1["data_path"]; Path A downloads into stage1_5.
     main_data_path = stage1.get("data_path", "")
+    if not main_data_path:
+        stage1_5 = state["stages"].get("stage1_5", {})
+        downloaded = stage1_5.get("downloaded_datasets", [])
+        if downloaded:
+            main_data_path = downloaded[0].get("local_path", "")
     main_data_name = Path(main_data_path).name if main_data_path else "N/A (Path A)"
     topic = stage1.get("topic", "")
 

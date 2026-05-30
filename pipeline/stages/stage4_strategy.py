@@ -80,6 +80,10 @@ def _score_identification(state: dict) -> int:
         "rdd", "regression discontinuity", "rct", "randomized", "experiment",
         "synthetic control", "synth", "vignette", "survey experiment",
         "field experiment", "lab experiment", "natural experiment",
+        "debiased machine learning", "double machine learning", "double ml",
+        "doubleml", "dml", "causal forest", "causal_forest",
+        "generalized random forest", "grf", "causal tree",
+        "heterogeneous treatment", "cate", "honest tree", "partially linear",
     ]
     # Tier 2: Panel-causal
     tier2_keywords = [

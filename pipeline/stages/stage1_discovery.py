@@ -167,6 +167,103 @@ def _search_github(topic: str, max_results: int = 5) -> list[dict]:
         return []
 
 
+def _search_semantic_scholar_seed_papers(topic: str, max_results: int = 10) -> list[dict]:
+    """Search Semantic Scholar for paper candidates usable in replication mode."""
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [semantic-scholar] Searching seed papers for '{topic}'...")
+    try:
+        r = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": topic,
+                "limit": max_results,
+                "fields": (
+                    "title,authors,year,venue,citationCount,abstract,"
+                    "url,openAccessPdf,externalIds"
+                ),
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        results = []
+        seen = set()
+        for p in r.json().get("data", []) or []:
+            title = (p.get("title") or "").strip()
+            if not title or title.lower() in seen:
+                continue
+            seen.add(title.lower())
+            authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
+            if len(p.get("authors") or []) > 3:
+                authors += " et al."
+            results.append({
+                "title": title,
+                "authors": authors,
+                "year": p.get("year"),
+                "venue": p.get("venue", ""),
+                "citationCount": p.get("citationCount", 0),
+                "abstract": p.get("abstract") or "",
+                "url": p.get("url") or "",
+                "openAccessPdf": p.get("openAccessPdf") or {},
+                "externalIds": p.get("externalIds") or {},
+                "source": "semantic_scholar",
+            })
+        print(f"  [semantic-scholar] Found {len(results)} seed papers")
+        return results
+    except Exception as e:
+        print(f"  [semantic-scholar] Error: {e}")
+        return []
+
+
+def _candidate_to_seed_paper(candidate: dict) -> dict | None:
+    """Convert a dataset/replication-package candidate into a paper-like record."""
+    source = (candidate.get("source_api") or "").lower()
+    provider = (candidate.get("provider") or "").lower()
+    haystack = " ".join([
+        str(candidate.get("name", "")),
+        str(candidate.get("description", "")),
+        str(candidate.get("url", "")),
+        source,
+        provider,
+    ]).lower()
+
+    if not any(k in haystack for k in ("replication", "paper", "journal", "dataverse", "github")):
+        return None
+    if source not in {"github", "journal", "dataverse"} and "replication" not in haystack:
+        return None
+
+    return {
+        "title": candidate.get("name", "Untitled replication package"),
+        "authors": "",
+        "year": str(candidate.get("published", ""))[:4] or None,
+        "venue": candidate.get("provider", ""),
+        "citationCount": 0,
+        "abstract": candidate.get("description", ""),
+        "url": candidate.get("url", ""),
+        "openAccessPdf": {},
+        "externalIds": {},
+        "source": "replication_package",
+        "replication_package_url": candidate.get("url", ""),
+        "dataset_candidate": candidate,
+    }
+
+
+def _dedupe_seed_papers(papers: list[dict]) -> list[dict]:
+    """Deduplicate paper candidates by title/url while preserving order."""
+    seen = set()
+    deduped = []
+    for p in papers:
+        key = (p.get("title") or p.get("url") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(p)
+    return deduped
+
+
 def _search_dbnomics(topic: str, max_results: int = 5) -> list[dict]:
     """Search DBnomics meta-aggregator (covers FRED, IMF, ECB, OECD, BIS, Eurostat, WB).
 
@@ -535,6 +632,17 @@ def _search_datos_gob_mx(topic: str, max_results: int = 5) -> list[dict]:
         use_format_filter=False,
         source_api="datos_gob_mx",
         dataset_url_template="https://datos.gob.mx/busca/dataset/{name}",
+    )
+
+
+def _search_datosabiertos_peru(topic: str, max_results: int = 5) -> list[dict]:
+    """Peru federal open data portal (datosabiertos.gob.pe) - CKAN."""
+    return _search_ckan(
+        api_root="https://www.datosabiertos.gob.pe",
+        portal_label="datosabiertos.gob.pe",
+        topic=topic,
+        max_results=max_results,
+        source_api="datosabiertos_peru",
     )
 
 
@@ -2344,6 +2452,371 @@ Return a JSON block:
 # the proxy filter narrows the search; the actual download + Q1-Q8 + ceiling
 # gate validates that the returned datasets are usable for a 75+ paper.
 
+# ── INEI (Peru) microdata integration ────────────────────────────────────────
+
+_PERU_KEYWORDS = {
+    "peru", "perú", "peruana", "peruano", "peruanos", "peruanas",
+    "enaho", "endes", "epen", "cenagro", "inei", "eea", "enapres",
+    "lima", "arequipa", "cusco", "puno", "cajamarca", "microdata peru",
+    "tambo", "tambos", "tambobook", "midis", "juntos", "pension 65",
+    "ubigeo", "reniec", "sisfoh",
+}
+
+
+def _is_peru_topic(topic: str) -> bool:
+    """Return True if topic likely refers to Peru or Peruvian data."""
+    topic_lower = topic.lower()
+    return any(kw in topic_lower for kw in _PERU_KEYWORDS)
+
+
+def _search_inei(topic: str, max_results: int = 5) -> list[dict]:
+    """Search INEI microdata catalog via the inei-microdatos package.
+
+    Returns candidates for Peru surveys (ENAHO, ENDES, EPEN, etc.) matching
+    the topic. Each candidate stores survey/year so Stage 1.5 can call
+    download_modules() directly instead of scraping the INEI portal.
+    Only runs when inei-microdatos is installed; fails silently otherwise.
+    """
+    try:
+        from inei_microdatos import load_catalog, search_variables
+        from inei_microdatos.catalog import filter_catalog
+    except ImportError:
+        print("  [inei] inei-microdatos not installed. Run: pip install inei-microdatos")
+        return []
+
+    print(f"  [inei] Searching INEI catalog for '{topic}'...")
+
+    # Map topic keywords to the most relevant INEI surveys
+    topic_lower = topic.lower()
+    survey_priority = []
+    _survey_keywords = [
+        (["pobreza", "poverty", "hogar", "household", "ingreso", "income",
+          "consumo", "consumption", "bienestar", "welfare",
+          "digital", "fintech", "wallet", "movil", "internet", "tecnologia",
+          "tambo", "tambos", "tambobook", "rural", "service platform",
+          "midis", "juntos", "pension 65", "social program", "public service",
+          "remote", "acceso", "access"], "enaho"),
+        (["empleo", "employment", "labor", "trabajo", "desempleo",
+          "unemployment", "salario", "wage", "ocupacion", "occupation"], "epen"),
+        (["salud", "health", "mortalidad", "mortality", "nutricion",
+          "nutrition", "fecundidad", "fertility", "demografica"], "endes"),
+        (["agro", "agricultura", "agriculture", "cultivo", "crop",
+          "ganaderia", "livestock", "cenagro"], "cenagro"),
+        (["empresa", "firm", "manufactura", "manufacturing",
+          "produccion economica", "economic production"], "eea"),
+    ]
+    for keywords, survey in _survey_keywords:
+        if any(kw in topic_lower for kw in keywords):
+            if survey not in survey_priority:
+                survey_priority.append(survey)
+
+    if not survey_priority:
+        survey_priority = ["enaho"]  # ENAHO is the most comprehensive fallback
+
+    try:
+        catalog = load_catalog()
+    except Exception as e:
+        print(f"  [inei] Could not load catalog: {e}")
+        return []
+
+    results = []
+    seen_keys: set = set()
+
+    # catalog is a list[dict]; each entry has 'years': {year_str: {period: {modules:[...]}}}
+    for survey in survey_priority[:2]:
+        try:
+            filtered = filter_catalog(catalog, survey=survey, year_min=2015)
+            # filtered is a list of survey entry dicts; collect all available years
+            all_years: set = set()
+            n_modules_by_year: dict = {}
+            for entry in filtered:
+                for yr_str, periods in (entry.get("years") or {}).items():
+                    try:
+                        yr_int = int(yr_str)
+                    except (ValueError, TypeError):
+                        continue
+                    all_years.add(yr_int)
+                    # count modules across all periods for this year
+                    mods = sum(
+                        len(p.get("modules", [])) for p in periods.values()
+                        if isinstance(p, dict)
+                    )
+                    n_modules_by_year[yr_int] = n_modules_by_year.get(yr_int, 0) + mods
+
+            for year in sorted(all_years, reverse=True)[:max_results]:
+                key = (survey, year)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                n_mods = n_modules_by_year.get(year, 0)
+                results.append({
+                    "name": f"INEI {survey.upper()} {year}",
+                    "provider": "INEI (inei-microdatos)",
+                    "url": "https://proyectos.inei.gob.pe/microdatos/",
+                    "description": (
+                        f"Encuesta {survey.upper()} año {year} — "
+                        f"{n_mods} módulos disponibles"
+                    ),
+                    "survey": survey,
+                    "year": year,
+                    "n_modules": n_mods,
+                    "source_api": "inei",
+                    "country": "Peru",
+                })
+                if len(results) >= max_results:
+                    break
+        except Exception as e:
+            print(f"  [inei] Error filtering {survey}: {e}")
+
+    print(f"  [inei] Found {len(results)} INEI datasets")
+    return results
+
+
+# ── BCRP (Peru central bank) macro time-series integration ───────────────────
+#
+# The Banco Central de Reserva del Perú publishes macro series through a free,
+# no-auth REST API. Unlike INEI (microdata cross-sections) BCRP gives a
+# country-level MONTHLY panel — ideal as outcome/control series for macro,
+# monetary, and trade papers. We always materialise the full six-indicator
+# snapshot so the resulting CSV clears the Stage-1 column gate; topic keywords
+# only steer the candidate label/description. No extra package — requests only.
+#
+# Verified monthly series codes (see Skills_Claude/mcp_bcrp_server.py, LAB11).
+_BCRP_SERIES: dict[str, dict] = {
+    "inflation":     {"code": "PN01271PM", "label": "Inflación IPC Lima (var% mensual)"},
+    "exchange_rate": {"code": "PN01234PM", "label": "Tipo de cambio promedio (S/ por USD)"},
+    "gdp":           {"code": "PN01773AM", "label": "PBI desestacionalizado (índice 2007=100)"},
+    "interest_rate": {"code": "PN07819NM", "label": "Tasa de referencia BCRP (% anual)"},
+    "trade_balance": {"code": "PN01781AM", "label": "Exportaciones acumuladas (millones USD)"},
+}
+
+_BCRP_KEYWORDS: list[tuple[list[str], str]] = [
+    (["inflation", "inflación", "inflacion", "ipc", "cpi", "precios", "prices"], "inflation"),
+    (["exchange", "cambio", "fx", "soles", "usd", "dollar", "dólar", "dolar"], "exchange_rate"),
+    (["gdp", "pbi", "pib", "growth", "crecimiento", "producto", "output", "actividad economica"], "gdp"),
+    (["interest", "interés", "interes", "tasa", "monetary", "monetaria", "policy rate"], "interest_rate"),
+    (["trade", "comercio", "exportaci", "import", "balanza", "exports"], "trade_balance"),
+]
+
+
+def _search_bcrp(topic: str, max_results: int = 1) -> list[dict]:
+    """Return a BCRP macro time-series candidate for Peru-related topics.
+
+    Always carries the full six-indicator monthly snapshot (so the downloaded
+    panel is wide enough for the Stage-1 quality gate). Topic keywords are used
+    only to highlight the most relevant indicators in the candidate label.
+    Stage 1.5 (`_try_download_bcrp`) fetches and merges the series into a CSV.
+    """
+    topic_lower = topic.lower()
+    matched = [ind for kws, ind in _BCRP_KEYWORDS if any(k in topic_lower for k in kws)]
+    series = {name: meta["code"] for name, meta in _BCRP_SERIES.items()}
+    if matched:
+        label = "BCRP Macro Panel (" + ", ".join(matched) + ", Peru)"
+    else:
+        label = "BCRP Macro Panel (Peru)"
+    desc = (
+        "Panel mensual de series macroeconómicas del BCRP: "
+        + ", ".join(m["label"] for m in _BCRP_SERIES.values())
+        + ". Fuente: estadisticas.bcrp.gob.pe (API pública, sin autenticación)."
+    )
+    print(f"  [bcrp] Macro panel candidate ({len(matched)} keyword match) for '{topic}'")
+    return [{
+        "name": label,
+        "provider": "BCRP (Banco Central de Reserva del Perú)",
+        "url": "https://estadisticas.bcrp.gob.pe/estadisticas/series/",
+        "description": desc[:300],
+        "series": series,
+        "primary": matched,
+        "start": "2004-01",
+        "source_api": "bcrp",
+        "country": "Peru",
+    }][:max_results]
+
+
+# ── Datos Abiertos Perú — curated downloadable datasets ──────────────────────
+#
+# datosabiertos.gob.pe is CKAN-based but most resources are NOT loaded into its
+# DataStore, so plain package_search rarely returns a parseable download_url
+# (see LAB11/DatosAbiertos/README.md). These curated entries point straight at
+# the CSV file so health/education topics surface ready-to-download data.
+# Mirrors LAB11/DatosAbiertos/catalog_curated.py.
+_DATOSABIERTOS_CURATED: list[dict] = [
+    {
+        "name": "MINSA - IPRESS (establecimientos de salud, RENIPRESS)",
+        "keywords": ["salud", "health", "ipress", "establecimiento", "hospital",
+                     "minsa", "renipress", "clinica", "centro de salud", "medico"],
+        "download_url": "https://www.datosabiertos.gob.pe/sites/default/files/recursos/2017/09/IPRESS.csv",
+        "encoding": "latin-1",
+    },
+    {
+        "name": "Alumnos matriculados 2016-2022 (MINEDU)",
+        "keywords": ["educacion", "educación", "matricula", "matrícula", "alumno",
+                     "estudiante", "escolar", "minedu", "colegio", "enrollment", "education", "school"],
+        "download_url": "https://www.datosabiertos.gob.pe/sites/default/files/Matriculados_2016_al_2022.csv",
+        "encoding": "utf-8",
+    },
+]
+
+
+def _search_datosabiertos_curated(topic: str, max_results: int = 5) -> list[dict]:
+    """Match curated, directly-downloadable Datos Abiertos Perú CSVs by keyword.
+
+    Complements the generic CKAN `_search_datosabiertos_peru` searcher, which
+    rarely yields a usable download_url on this portal.
+    """
+    topic_lower = topic.lower()
+    results = []
+    for ds in _DATOSABIERTOS_CURATED:
+        if any(kw in topic_lower for kw in ds["keywords"]):
+            results.append({
+                "name": ds["name"],
+                "provider": "Datos Abiertos Perú (curado)",
+                "url": "https://www.datosabiertos.gob.pe/",
+                "download_url": ds["download_url"],
+                "download_format": "csv",
+                "description": ds["name"],
+                "encoding": ds.get("encoding", "utf-8"),
+                "source_api": "datosabiertos_curated",
+                "country": "Peru",
+            })
+            if len(results) >= max_results:
+                break
+    if results:
+        print(f"  [datosabiertos] Matched {len(results)} curated dataset(s) for '{topic}'")
+    return results
+
+
+# ── MINEM (Peru mining production) — curated GitHub-hosted CSVs ───────────────
+#
+# Official Peruvian metallic-mining production 2021–2025 (MINEM), mirrored as
+# clean CSVs in elqvixote/metalurgica-data. One row per district × mineral ×
+# month with a production `Valor` — a usable geographic/temporal panel for
+# mining, natural-resource, and regional-econ papers. Files are on GitHub raw
+# (direct, no auth); `_try_download_minem` concatenates the years.
+_MINEM_YEARS = [2021, 2022, 2023, 2024, 2025]
+_MINEM_RAW = (
+    "https://raw.githubusercontent.com/elqvixote/metalurgica-data/main/"
+    "datasets/government-metal-production-data/Peru/PRODUCCION%20METALICA%20{year}.csv"
+)
+_MINEM_KEYWORDS = [
+    "mineria", "minería", "minero", "minera", "minem", "mining", "metal",
+    "metalurgia", "metallurgy", "cobre", "copper", "oro", "gold", "zinc",
+    "produccion minera", "producción minera", "extractive", "extractiva",
+]
+
+
+def _search_minem(topic: str, max_results: int = 1) -> list[dict]:
+    """Return a MINEM mining-production panel candidate for mining-related topics."""
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _MINEM_KEYWORDS):
+        return []
+    urls = [_MINEM_RAW.format(year=y) for y in _MINEM_YEARS]
+    print(f"  [minem] Mining-production panel candidate for '{topic}'")
+    return [{
+        "name": f"MINEM Producción Metálica Perú {_MINEM_YEARS[0]}-{_MINEM_YEARS[-1]}",
+        "provider": "MINEM (vía elqvixote/metalurgica-data)",
+        "url": "https://github.com/elqvixote/metalurgica-data/tree/main/datasets/government-metal-production-data/Peru",
+        "description": (
+            "Producción minera metálica oficial del Perú por distrito, mineral y mes "
+            f"({_MINEM_YEARS[0]}–{_MINEM_YEARS[-1]}). Fuente: MINEM. Panel geográfico-temporal."
+        ),
+        "download_urls": urls,
+        "download_format": "csv",
+        "source_api": "minem",
+        "country": "Peru",
+    }][:max_results]
+
+
+# ── Peru replication packages ("replicar papers") ────────────────────────────
+#
+# Public Peru-focused analysis repos registered as replication seed candidates.
+# They surface as GitHub replication packages in discovery (via
+# `_candidate_to_seed_paper`, which keys on a GitHub URL + the word
+# "replication") so the pipeline can replicate / extend their analysis. The
+# `data_url` points at the underlying open dataset for manual retrieval.
+_PERU_REPLICATION_PACKAGES = [
+    {
+        "name": "Atenciones de cobertura oncológica en Perú 2022 (FISSAL) — replication",
+        "repo": "https://github.com/haroldeustaquio/Analysis-of-Oncological-Diseases-in-Peru",
+        "data_url": "https://www.datosabiertos.gob.pe/dataset/atenciones-de-cobertura-oncol%C3%B3gica-2022-fondo-intangible-solidario-de-salud",
+        "year": 2024,
+        "keywords": ["cancer", "cáncer", "oncolog", "salud", "health", "fissal",
+                     "enfermedad", "disease", "morbilidad", "atencion", "atención",
+                     "tumor", "neoplasia"],
+        "area": "health / oncology",
+    },
+    {
+        "name": "Producción minera/metalúrgica Perú (MINEM 2021-2025) — replication / datasets",
+        "repo": "https://github.com/elqvixote/metalurgica-data",
+        "data_url": "https://github.com/elqvixote/metalurgica-data/tree/main/datasets/government-metal-production-data/Peru",
+        "year": 2026,
+        "keywords": _MINEM_KEYWORDS,
+        "area": "mining / metallurgy",
+    },
+]
+
+
+def _search_peru_replication_packages(topic: str, max_results: int = 5) -> list[dict]:
+    """Surface curated Peru analysis repos as replication seed candidates.
+
+    Returned candidates carry a GitHub repo URL and the word "replication" so
+    `_candidate_to_seed_paper` converts them into replication packages the
+    pipeline can replicate or extend.
+    """
+    topic_lower = topic.lower()
+    results = []
+    for pkg in _PERU_REPLICATION_PACKAGES:
+        if any(kw in topic_lower for kw in pkg["keywords"]):
+            results.append({
+                "name": pkg["name"],
+                "provider": "Peru Replication Package (GitHub)",
+                "url": pkg["repo"],
+                "description": (
+                    f"Replication package. Open data: {pkg['data_url']} "
+                    f"(area: {pkg['area']})."
+                ),
+                "published": str(pkg["year"]),
+                "replication_package_url": pkg["repo"],
+                "data_url": pkg["data_url"],
+                "source_api": "peru_replication",
+                "country": "Peru",
+            })
+            if len(results) >= max_results:
+                break
+    if results:
+        print(f"  [peru-repl] Matched {len(results)} replication package(s) for '{topic}'")
+    return results
+
+
+def _infer_country(candidate: dict) -> str:
+    """Infer country from dataset name/description when not explicitly set."""
+    if candidate.get("country"):
+        return candidate["country"]
+    text = ((candidate.get("name") or "") + " " + (candidate.get("description") or "")).lower()
+    _MAP = [
+        (["peru", "perú", "enaho", "inei", "tambo", "midis", "juntos", "pension 65"], "Peru"),
+        (["mexico", "méxico", "mexican", "progresa", "oportunidades"], "Mexico"),
+        (["brazil", "brasil", "brazilian"], "Brazil"),
+        (["spain", "spanish", "españa"], "Spain"),
+        (["india", "indian"], "India"),
+        (["china", "chinese"], "China"),
+        (["kenya", "kenyan"], "Kenya"),
+        (["indonesia", "indonesian"], "Indonesia"),
+        (["ethiopia", "ethiopian"], "Ethiopia"),
+        (["colombia", "colombian"], "Colombia"),
+        (["cameroon", "cameroonian"], "Cameroon"),
+        (["sri lanka"], "Sri Lanka"),
+        (["rwanda", "rwandan"], "Rwanda"),
+        (["hiroshima", "japan", "japanese"], "Japan"),
+        (["oregon", "u.s.", " usa", "united states", "american"], "USA"),
+        (["uk ", "united kingdom", "britain", "british"], "UK"),
+    ]
+    for keywords, country in _MAP:
+        if any(kw in text for kw in keywords):
+            return country
+    return ""
+
+
 def _likely_quality(candidate: dict) -> bool:
     """Heuristic metadata-only proxy for whether a candidate is likely to
     pass the full Q1-Q8 + ceiling >= 75 gate.
@@ -2357,7 +2830,10 @@ def _likely_quality(candidate: dict) -> bool:
     name = (candidate.get("name") or "").lower()
 
     # Strong positive signals: pre-validated provenance
-    if src in ("curated_registry", "journal"):
+    # bcrp + datosabiertos_curated are official Peruvian sources with known,
+    # directly-downloadable structure (same tier as INEI government microdata).
+    if src in ("curated_registry", "journal", "inei", "bcrp",
+               "datosabiertos_curated", "minem"):
         return True
 
     # Dataverse: title must signal an academic replication archive
@@ -2493,6 +2969,18 @@ def _count_quality_candidates_for_variant(variant: str) -> dict:
         except Exception:
             pass
 
+    # Peru-specific official sources when topic is Peru-related:
+    #   INEI    — survey microdata (cross-sections / panels)
+    #   BCRP    — macro monthly time series (inflation, FX, GDP, rates, trade)
+    #   Datos Abiertos — national open-data portal (CKAN search + curated CSVs)
+    if _is_peru_topic(variant):
+        candidates.extend(_search_inei(variant, max_results=5))
+        candidates.extend(_search_bcrp(variant, max_results=1))
+        candidates.extend(_search_minem(variant, max_results=1))
+        candidates.extend(_search_datosabiertos_curated(variant, max_results=5))
+        candidates.extend(_search_datosabiertos_peru(variant, max_results=5))
+        candidates.extend(_search_peru_replication_packages(variant, max_results=5))
+
     n_total = len(candidates)
     n_high = sum(1 for c in candidates if _likely_quality(c))
     return {
@@ -2536,12 +3024,16 @@ def _rank_and_select_variant(counts: list[dict], original_topic: str) -> dict:
 
 def _validate_path_a_candidates(candidates: list[dict],
                                 project_dir: Path,
-                                max_attempts: int = 8) -> list[dict]:
+                                max_attempts: int = 8,
+                                peru_topic: bool = False) -> list[dict]:
     """Download top candidates and apply Q1-Q8-style validation.
 
     Reuses the Stage 1.5 download/profile/feasibility helpers. Returns
     qualified datasets only (those passing _MIN_ROWS, _MIN_COLS, ceiling
     threshold, and basic missing-data check).
+
+    When peru_topic=True, INEI datasets are tried first so they are not
+    crowded out by high-ceiling international datasets.
     """
     from .stage1_5_data_loading import (
         _try_download_dataverse, _try_download_zenodo, _try_download_direct,
@@ -2550,9 +3042,13 @@ def _validate_path_a_candidates(candidates: list[dict],
     data_dir = project_dir / "data" / "external"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Sort: high-confidence first, then by causal-related title keywords
+    # Sort: for Peru topics INEI goes first (tier 0); otherwise sort by
+    # quality proxy then score_ceiling descending.
     def _rank_key(c):
-        hi = 0 if _likely_quality(c) else 1
+        src = c.get("source_api", "")
+        if peru_topic and src in ("inei", "bcrp", "datosabiertos_curated", "minem"):
+            return (0, 0)
+        hi = 1 if _likely_quality(c) else 2
         return (hi, -(c.get("score_ceiling", 0) or 0))
     sorted_candidates = sorted(candidates, key=_rank_key)
 
@@ -2575,7 +3071,20 @@ def _validate_path_a_candidates(candidates: list[dict],
 
         # Reuse Stage 1.5 download helpers based on URL/provider
         local_path = None
-        if "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
+        src_api = c.get("source_api", "")
+        if src_api == "inei" or "inei" in provider:
+            from .stage1_5_data_loading import _try_download_inei
+            local_path = _try_download_inei(c, data_dir)
+        elif src_api == "bcrp":
+            from .stage1_5_data_loading import _try_download_bcrp
+            local_path = _try_download_bcrp(c, data_dir)
+        elif src_api == "minem":
+            from .stage1_5_data_loading import _try_download_minem
+            local_path = _try_download_minem(c, data_dir)
+        elif src_api in ("datosabiertos_curated", "datosabiertos_peru") or "datosabiertos" in provider:
+            from .stage1_5_data_loading import _try_download_datosabiertos
+            local_path = _try_download_datosabiertos(c, data_dir)
+        elif "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
             local_path = _try_download_dataverse(url, data_dir)
         elif "zenodo" in provider or "zenodo.org" in url:
             local_path = _try_download_zenodo(url, data_dir)
@@ -2583,6 +3092,12 @@ def _validate_path_a_candidates(candidates: list[dict],
             local_path = _try_download_direct(url, data_dir)
         if not local_path:
             print(f"       [skip] Could not download")
+            continue
+
+        # Skip files > 300 MB — too slow/risky to load fully at Stage 1.
+        _file_mb = Path(local_path).stat().st_size / (1024 * 1024)
+        if _file_mb > 300:
+            print(f"       [skip] File too large for Stage 1 profiling ({_file_mb:.0f} MB > 300 MB limit)")
             continue
 
         # Profile + minimal Q-checks
@@ -2841,10 +3356,45 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
     # ── Phase 3: Rank + select winner ──────────────────────────────────
     selected = _rank_and_select_variant(counts, topic)
 
+    # ── Remove candidates whose datasets were already used in other projects ──
+    # INEI surveys are reused (same data, different questions) — only exclude
+    # Dataverse/journal replication packages to avoid duplicate papers.
+    try:
+        from ..config import PAPERS_HQ
+        _used_names: set[str] = set()
+        for _proj in (PAPERS_HQ / "projects").iterdir():
+            if not _proj.is_dir() or _proj == project_dir:
+                continue
+            _sf = _proj / "pipeline_state.json"
+            if not _sf.exists():
+                continue
+            try:
+                _ps = json.loads(_sf.read_text(encoding="utf-8"))
+                for _ds in _ps.get("stages", {}).get("stage1_5", {}).get(
+                        "downloaded_datasets", []):
+                    _n = Path(_ds.get("local_path", "")).name.lower()
+                    if _n and not _n.startswith("enaho") and not _n.startswith("inei"):
+                        _used_names.add(_n)
+            except Exception:
+                pass
+        if _used_names:
+            before = len(selected["candidates"])
+            selected["candidates"] = [
+                c for c in selected["candidates"]
+                if c.get("source_api") == "inei"
+                or Path(c.get("url", "")).name.lower() not in _used_names
+            ]
+            removed = before - len(selected["candidates"])
+            if removed:
+                print(f"  [dedup] Excluded {removed} datasets already used in previous projects")
+    except Exception:
+        pass
+
     # ── Phase 4: Download + validate top candidates of winner ──────────
     print(f"\n  [validate] Downloading + validating candidates of winning variant...")
     qualified = _validate_path_a_candidates(
-        selected["candidates"], project_dir, max_attempts=8
+        selected["candidates"], project_dir, max_attempts=8,
+        peru_topic=_is_peru_topic(topic),
     )
 
     elapsed_total = _time.time() - t0
@@ -2875,7 +3425,18 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
             "tier": q["tier"],
             "source_api": ds.get("source_api", "?"),
             "selected_variant": selected["variant"],
+            "country": _infer_country(ds),
         })
+
+    seed_papers = []
+    seed_papers.extend(_search_semantic_scholar_seed_papers(selected["variant"], max_results=8))
+    if selected["variant"] != topic:
+        seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=5))
+    for c in selected.get("candidates", []):
+        p = _candidate_to_seed_paper(c)
+        if p:
+            seed_papers.append(p)
+    seed_papers = _dedupe_seed_papers(seed_papers)
 
     papers_data = {
         "topic": topic,
@@ -2886,6 +3447,7 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
             for c in counts
         ],
         "data_sources": data_sources,
+        "seed_papers": seed_papers,
     }
 
     output_file = project_dir / "stage1_discovery.md"
@@ -2904,6 +3466,7 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
         "output_file": str(output_file),
         "completed_at": datetime.now().isoformat(),
         "recommended_data_sources": data_sources,
+        "seed_papers": seed_papers,
     }
 
     # Path A now downloads + validates in Stage 1 itself, so populate the
@@ -2920,6 +3483,7 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
             "provider": ds.get("provider", "?"),
             "url": ds.get("url", ""),
             "local_path": q["local_path"],
+            "country": _infer_country(ds),
             "profile": {
                 "rows": prof.get("rows", 0),
                 "cols": prof.get("cols", 0),
@@ -2963,6 +3527,9 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
         for i, ds in enumerate(data_sources, 1):
             print(f"\n    [{i}] {ds['name'][:60]}")
             print(f"        Provider:  {ds['provider']}")
+            country = ds.get("country", "")
+            if country:
+                print(f"        Country:   {country}")
             print(f"        Structure: {ds['data_structure']}")
             print(f"        Size:      {ds['n_rows']:,} rows × {ds['n_cols']} cols")
             print(f"        Ceiling:   {ds['score_ceiling']}/100")
@@ -3491,6 +4058,11 @@ Select the TOP 3 and return ONLY a JSON block:
         n_sources = len(papers_data["data_sources"])
         best_score = max((ds.get("causal_score", 0) for ds in papers_data["data_sources"]), default=0)
         print(f"  [ok] Found {n_sources} data sources (best causal score: {best_score}/5)")
+    if papers_data and "seed_papers" in papers_data:
+        state["stages"]["stage1"]["seed_papers"] = papers_data.get("seed_papers", [])
+    elif not data_path:
+        seed_papers = _search_semantic_scholar_seed_papers(topic, max_results=8)
+        state["stages"]["stage1"]["seed_papers"] = seed_papers
 
     if not papers_data:
         print("  [warn] Could not parse structured JSON. Check stage1_discovery.md manually.")

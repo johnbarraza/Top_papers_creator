@@ -229,8 +229,32 @@ def run(project_dir: Path, state: dict) -> dict:
             f"Pre-trend testing is {'possible but limited' if n_pre < 3 else 'feasible'}.\n"
         )
 
+    replication_context = ""
+    if stage2.get("mode") == "replication":
+        chosen_paper = stage2.get("chosen_paper", {})
+        replication_context = f"""
+PAPER MODE: Replication / HTE extension
+
+BASE PAPER:
+Title: {chosen_paper.get('title', 'N/A')}
+Authors: {chosen_paper.get('authors', 'N/A')}
+Year: {chosen_paper.get('year', 'N/A')}
+Venue: {chosen_paper.get('venue', 'N/A')}
+URL: {chosen_paper.get('url', 'N/A')}
+
+REPLICATION-SPECIFIC VALIDATION:
+You MUST evaluate whether:
+1. The original paper's estimand is clear enough to replicate.
+2. The available data can reproduce the original sample and baseline ATE.
+3. The HTE extension is connected to the original paper rather than a new unrelated project.
+4. Baseline ATE replication happens before CATE/heterogeneity claims.
+5. Overlap, treatment variation, sample size, and pre-treatment covariates are sufficient for HTE.
+"""
+
     idea_text = f"""RESEARCH IDEA SUBMISSION
 ========================
+
+{replication_context}
 
 IDEA TITLE:
 {best_idea.get('title', 'Untitled')}

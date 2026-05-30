@@ -95,6 +95,8 @@ def main():
                         help="Start from a specific stage (e.g. 1, 2, 2.5, 3, 3.5, 4)")
     parser.add_argument("--to-stage", type=float, default=7,
                         help="Stop after a specific stage (default: 7)")
+    parser.add_argument("--mode", choices=["new", "replicate", "ask"], default="ask",
+                        help="Stage 2 mode: new ideas, replication/HTE, or ask interactively")
     parser.add_argument("--status", type=str, metavar="PROJECT",
                         help="Show status of a project")
 
@@ -207,6 +209,7 @@ def main():
         state["data_path"] = args.data
     if args.path_c:
         state["path_c"] = True
+    state.setdefault("config", {})["stage2_mode"] = args.mode
 
     print(f"Project: {project_name}")
     print(f"Directory: {project_dir}")

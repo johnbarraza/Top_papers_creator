@@ -423,6 +423,302 @@ def _try_extract(archive_path: Path, data_dir: Path) -> Optional[tuple[str, list
     return None
 
 
+def _try_download_inei(dataset_info: dict, data_dir: Path) -> Optional[str]:
+    """Download INEI microdata using the inei-microdatos package.
+
+    Requires: pip install inei-microdatos
+    Uses dataset_info["survey"] and dataset_info["year"] to filter the
+    catalog and call download_modules(). Downloads ZIPs containing .dta
+    files and returns the path to the largest extracted .dta file.
+    """
+    try:
+        from inei_microdatos import load_catalog, download_modules
+        from inei_microdatos.catalog import filter_catalog
+    except ImportError:
+        print("    [inei] inei-microdatos not installed. Run: pip install inei-microdatos")
+        return None
+
+    survey = dataset_info.get("survey", "enaho")
+    year = dataset_info.get("year")
+    if not year:
+        print("    [inei] Missing year in dataset_info — cannot download")
+        return None
+
+    # ── Cross-project cache check ───────────────────────────────────────
+    # If a previous project already downloaded the same survey+year, reuse
+    # the existing .dta file to avoid re-downloading large files.
+    try:
+        from ..config import PAPERS_HQ
+        _MB = 1024 * 1024
+        for _prev_proj in (PAPERS_HQ / "projects").iterdir():
+            _inei_root = _prev_proj / "data" / "external" / "inei"
+            if not _inei_root.exists():
+                continue
+            for _dta in _inei_root.rglob("*.dta"):
+                # Skip lookup/reference tables (not survey microdata)
+                if "tabla" in _dta.name.lower() or "codigos" in _dta.name.lower():
+                    continue
+                # Match survey+year from path segments
+                _parts = str(_dta).lower()
+                if str(survey).lower() in _parts and str(year) in _parts:
+                    _sz = _dta.stat().st_size
+                    if 0 < _sz < 200 * _MB:
+                        print(f"    [inei] Reusing cached {survey.upper()} {year} "
+                              f"from previous project: {_dta.name} ({_sz//_MB} MB)")
+                        return str(_dta)
+    except Exception:
+        pass  # Cache miss is fine — fall through to download
+
+    print(f"    [inei] Downloading {survey.upper()} {year} (up to 5 modules for profiling)...")
+    try:
+        catalog = load_catalog()
+        modules = filter_catalog(catalog, survey=survey,
+                                 year_min=int(year), year_max=int(year))
+        if not hasattr(modules, "__len__") or len(modules) == 0:
+            print(f"    [inei] No modules found for {survey} {year}")
+            return None
+
+        # Limit to 5 modules to keep Stage 1 discovery fast.
+        # Trim the modules lists inside each period of each catalog entry so
+        # download_modules only fetches a representative sample for profiling.
+        MAX_MODULES = 5
+        total_so_far = 0
+        trimmed: list = []
+        for entry in modules:
+            if total_so_far >= MAX_MODULES:
+                break
+            import copy
+            e = copy.deepcopy(entry)
+            for yr_key, periods in e.get("years", {}).items():
+                for period_key, period_data in periods.items():
+                    mods = period_data.get("modules", [])
+                    remaining = MAX_MODULES - total_so_far
+                    period_data["modules"] = mods[:remaining]
+                    total_so_far += len(period_data["modules"])
+            trimmed.append(e)
+        modules = trimmed
+
+        inei_dir = data_dir / "inei"
+        inei_dir.mkdir(parents=True, exist_ok=True)
+        download_modules(modules, dest=str(inei_dir), fmt="STATA", workers=2)
+
+        # Find downloaded ZIPs and extract .dta files
+        zip_files = sorted(inei_dir.rglob("*.zip"),
+                           key=lambda p: p.stat().st_size, reverse=True)
+        dta_files = list(inei_dir.rglob("*.dta"))
+
+        if dta_files:
+            # Prefer the smallest file under 200 MB for fast profiling.
+            # ENAHO module 05 (income/expenditure) is often 500 MB+ and
+            # too slow to load with pd.read_stata at Stage 1 discovery.
+            _MB = 1024 * 1024
+            small = [f for f in dta_files if f.stat().st_size < 200 * _MB]
+            if small:
+                primary = min(small, key=lambda p: p.stat().st_size)
+            else:
+                primary = min(dta_files, key=lambda p: p.stat().st_size)
+            print(f"    [inei] Found {len(dta_files)} .dta files, primary: {primary.name} "
+                  f"({primary.stat().st_size // _MB} MB)")
+            return str(primary)
+
+        for zf in zip_files[:3]:
+            result = _try_extract(zf, zf.parent)
+            if result:
+                primary, _ = result
+                print(f"    [inei] Extracted from {zf.name}: {Path(primary).name}")
+                return primary
+
+        print(f"    [inei] Download completed but no .dta or .zip files found")
+        return None
+
+    except Exception as e:
+        print(f"    [inei] Download error: {e}")
+        return None
+
+
+def _try_download_bcrp(dataset_info: dict, data_dir: Path) -> Optional[str]:
+    """Download BCRP monthly macro series and write a merged wide-panel CSV.
+
+    Fetches each code in dataset_info["series"] ({indicator: code}) from the
+    BCRP public REST API, merges them by month into one row per period, and
+    writes bcrp_macro_peru.csv. Needs only requests + pandas — no API key,
+    no extra package. See BCRP_INTEGRATION.md.
+    """
+    import requests
+    import pandas as pd
+
+    series = dataset_info.get("series") or {}
+    if not series:
+        print("    [bcrp] No series codes in dataset_info — cannot download")
+        return None
+
+    start = dataset_info.get("start", "2004-01")
+    end = datetime.now().strftime("%Y-%m")
+    base = "https://estadisticas.bcrp.gob.pe/estadisticas/series/api"
+
+    # BCRP labels months in Spanish ("Set" = September, not "Sep").
+    _MONTHS = {
+        "ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+        "jul": 7, "ago": 8, "set": 9, "sep": 9, "oct": 10, "nov": 11, "dic": 12,
+    }
+
+    def _period_to_ym(name: str):
+        try:
+            mon, yr = name.replace(".", " ").split()
+            return int(yr), _MONTHS.get(mon[:3].lower(), 0)
+        except Exception:
+            return None
+
+    headers = {"User-Agent": "Mozilla/5.0 (papers-hq)"}
+    merged: dict = {}   # period_name -> {indicator: value}
+    order: list = []
+    print(f"    [bcrp] Fetching {len(series)} series {start}..{end}...")
+    for indicator, code in series.items():
+        url = f"{base}/{code}/json/{start}/{end}"
+        try:
+            r = requests.get(url, timeout=20, headers=headers)
+            r.raise_for_status()
+            data = json.loads(r.content.decode("utf-8-sig"))
+        except Exception as e:
+            print(f"    [bcrp] {indicator} ({code}) failed: {e}")
+            continue
+        for p in data.get("periods", []):
+            name = p.get("name", "")
+            vals = p.get("values", []) or []
+            try:
+                val = float(vals[0]) if vals and vals[0] not in ("", "n.d.") else None
+            except (TypeError, ValueError):
+                val = None
+            if name not in merged:
+                merged[name] = {}
+                order.append(name)
+            merged[name][indicator] = val
+
+    if not merged:
+        print("    [bcrp] No data returned from any series")
+        return None
+
+    rows = []
+    for name in order:
+        ym = _period_to_ym(name)
+        row: dict = {"period": name}
+        if ym:
+            row["year"], row["month"] = ym[0], ym[1]
+        row.update(merged[name])
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if "year" in df.columns and "month" in df.columns:
+        df = df.sort_values(["year", "month"]).reset_index(drop=True)
+
+    out = data_dir / "bcrp"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "bcrp_macro_peru.csv"
+    df.to_csv(path, index=False, encoding="utf-8")
+    print(f"    [bcrp] Saved {path.name} ({len(df)} months x {len(df.columns)} cols)")
+    return str(path)
+
+
+def _try_download_minem(dataset_info: dict, data_dir: Path) -> Optional[str]:
+    """Download + concatenate MINEM yearly mining-production CSVs into one panel.
+
+    Reads each GitHub-raw CSV in dataset_info["download_urls"], concatenates the
+    years (each file already carries a YEAR column), and writes a single CSV.
+    """
+    import requests
+    import pandas as pd
+    from io import StringIO
+
+    urls = dataset_info.get("download_urls") or []
+    if not urls:
+        u = dataset_info.get("download_url")
+        urls = [u] if u else []
+    if not urls:
+        print("    [minem] No download URLs in dataset_info — cannot download")
+        return None
+
+    headers = {"User-Agent": "Mozilla/5.0 (papers-hq)"}
+    frames = []
+    print(f"    [minem] Fetching {len(urls)} yearly CSV(s)...")
+    for u in urls:
+        try:
+            r = requests.get(u, timeout=60, headers=headers)
+            r.raise_for_status()
+            txt = r.content.decode("utf-8-sig", errors="replace")
+            frames.append(pd.read_csv(StringIO(txt)))
+        except Exception as e:
+            print(f"    [minem] ...{u[-24:]} failed: {e}")
+
+    if not frames:
+        print("    [minem] No CSVs downloaded")
+        return None
+
+    df = pd.concat(frames, ignore_index=True)
+    out = data_dir / "minem"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "minem_produccion_metalica_peru.csv"
+    df.to_csv(path, index=False, encoding="utf-8")
+    print(f"    [minem] Saved {path.name} "
+          f"({len(df)} rows x {len(df.columns)} cols, {len(frames)} years)")
+    return str(path)
+
+
+def _try_download_datosabiertos(dataset_info: dict, data_dir: Path) -> Optional[str]:
+    """Download a Datos Abiertos Perú resource.
+
+    Prefers the direct CSV download_url (curated catalog). Falls back to the
+    CKAN DataStore API when only a resource_id is available (most portal
+    resources are not loaded into DataStore, so the curated URL is the reliable
+    path). See LAB11/DatosAbiertos/README.md.
+    """
+    import requests
+
+    out = data_dir / "datosabiertos"
+    out.mkdir(parents=True, exist_ok=True)
+    headers = {"User-Agent": "Mozilla/5.0 (papers-hq)"}
+
+    url = dataset_info.get("download_url") or ""
+    if url.lower().endswith((".csv", ".tsv", ".xlsx", ".xls", ".zip")):
+        try:
+            print(f"    [datosabiertos] Downloading {url[:80]}...")
+            resp = requests.get(url, timeout=120, headers=headers, allow_redirects=True)
+            if resp.status_code == 200 and len(resp.content) > 500:
+                from urllib.parse import urlparse
+                fname = _safe_filename(Path(urlparse(url).path).name,
+                                       default="datosabiertos.csv")
+                path = out / fname
+                path.write_bytes(resp.content)
+                print(f"    [datosabiertos] Saved {fname} "
+                      f"({len(resp.content) / (1024 * 1024):.1f} MB)")
+                return str(path)
+            print(f"    [datosabiertos] HTTP {resp.status_code} / empty body")
+        except Exception as e:
+            print(f"    [datosabiertos] Direct download failed: {e}")
+
+    # CKAN DataStore fallback (when a resource_id is known)
+    rid = dataset_info.get("resource_id")
+    if rid:
+        try:
+            import pandas as pd
+            api = "https://www.datosabiertos.gob.pe/api/3/action/datastore_search"
+            resp = requests.get(api, params={"resource_id": rid, "limit": 10000},
+                                timeout=60, headers=headers)
+            resp.raise_for_status()
+            records = resp.json().get("result", {}).get("records", [])
+            if records:
+                df = pd.DataFrame(records)
+                df = df.drop(columns=[c for c in ("_id",) if c in df.columns])
+                path = out / f"datosabiertos_{str(rid)[:8]}.csv"
+                df.to_csv(path, index=False, encoding="utf-8")
+                print(f"    [datosabiertos] Saved {path.name} "
+                      f"({len(df)} rows via DataStore)")
+                return str(path)
+        except Exception as e:
+            print(f"    [datosabiertos] DataStore fallback failed: {e}")
+
+    return None
+
+
 def _try_download_direct(url: str, data_dir: Path) -> Optional[str]:
     """Try a direct HTTP download (for generic URLs)."""
     import requests
@@ -887,7 +1183,15 @@ def run(project_dir: Path, state: dict) -> dict:
         local_path = None
 
         # Try provider-specific downloaders
-        if "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
+        if ds.get("source_api") == "inei" or "inei" in provider:
+            local_path = _try_download_inei(ds, data_dir)
+        elif ds.get("source_api") == "bcrp":
+            local_path = _try_download_bcrp(ds, data_dir)
+        elif ds.get("source_api") == "minem":
+            local_path = _try_download_minem(ds, data_dir)
+        elif ds.get("source_api") in ("datosabiertos_curated", "datosabiertos_peru") or "datosabiertos" in provider:
+            local_path = _try_download_datosabiertos(ds, data_dir)
+        elif "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
             local_path = _try_download_dataverse(url, data_dir)
         elif "zenodo" in provider or "zenodo.org" in url or "10.5281/zenodo" in url:
             local_path = _try_download_zenodo(url, data_dir)
