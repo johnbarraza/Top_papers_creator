@@ -132,6 +132,10 @@ etc.). Non-Peru topics skip them entirely — no overhead.
 
 - **BCRP reserves series unavailable** — `PN01265GM` 403s; net international
   reserves are not included. If a valid code is found, add it to `_BCRP_SERIES`.
+- **BCRP fiscal/transfer series restricted** — All codes in the `02xxx` range
+  (canon minero, transferencias, regalías) return HTTP 403 from the public API.
+  These require authenticated access. For canon/transfer data, use **MEF Consulta
+  Amigable** (manual download) or the curated MEF reference in Stage 1.
 - **GDP/trade lag** — the most recent 1–2 months are often `NaN` (data not yet
   published). Expected; downstream cleaning should `dropna`/forward-handle.
 - **Curated catalog is static** — only health + education are wired. Extend

@@ -2515,6 +2515,14 @@ _PERU_KEYWORDS = {
     "licitación", "contrataciones", "ocds", "contrataciones abiertas",
     # Telecom
     "osiptel", "punku", "telecom", "telecomunicaciones",
+    # Geology / mining spatial data
+    "ingemmet", "geocatmin", "geologia", "geología", "geologico",
+    "geológico", "deposito mineral", "depósito mineral", "catastro minero",
+    "yacimiento",
+    # Fiscal / canon / transfers
+    "canon minero", "canon y sobrecanon", "regalias mineras", "regalías",
+    "mef", "consulta amigable", "transferencias", "sobrecanon",
+    "ingresos fiscales mineros",
     # Competition / IP / consumer
     "indecopi", "competencia", "antitrust", "propiedad intelectual",
     "proteccion al consumidor", "protección al consumidor",
@@ -2640,6 +2648,10 @@ def _search_inei(topic: str, max_results: int = 5) -> list[dict]:
 # only steer the candidate label/description. No extra package — requests only.
 #
 # Verified monthly series codes (see Skills_Claude/mcp_bcrp_server.py, LAB11).
+# NOTE: Fiscal/transfer series (02xxx range, e.g. PN02832AM canon minero) all
+# return HTTP 403 from the public API — BCRP restricts these to authenticated
+# users. For canon/transfer data, use MEF Consulta Amigable (manual) instead.
+# The 5 series below cover macro outcomes/controls; they are confirmed working.
 _BCRP_SERIES: dict[str, dict] = {
     "inflation":     {"code": "PN01271PM", "label": "Inflación IPC Lima (var% mensual)"},
     "exchange_rate": {"code": "PN01234PM", "label": "Tipo de cambio promedio (S/ por USD)"},
@@ -3235,6 +3247,185 @@ def _search_indecopi(topic: str, max_results: int = 2) -> list[dict]:
     return results[:max_results]
 
 
+# ── INGEMMET GEOCATMIN (Peru geology/mining spatial data) integration ─────────
+#
+# GEOCATMIN exposes OGC WMS/WFS services with 245+ layers including mineral
+# deposits, mining cadastre, geological maps, and geochemistry. WFS endpoints
+# return vector data (points/polygons) consumable by geopandas for spatial
+# instruments (e.g. distance-to-deposit IVs). No auth required.
+#
+# Layers used (verified live 2026-05-30):
+#   SERV_GEOLOGIA_M/MapServer/WFSServer — geology 1:1M (mineral deposits)
+#   SERV_CATASTRO_MINERO/MapServer/WFSServer — mining cadastre (concessions)
+#
+# Download uses owslib if installed, else raw requests + manual GeoJSON parse.
+_INGEMMET_WFS_BASE = (
+    "http://geocatmin.ingemmet.gob.pe/arcgis/services"
+)
+_INGEMMET_LAYERS: list[dict] = [
+    {
+        "name": "GEOCATMIN — Depósitos Minerales (Geología 1:1M)",
+        "service": "SERV_GEOLOGIA_M/MapServer/WFSServer",
+        "type": "wfs",
+        "description": (
+            "Yacimientos y depósitos minerales del Perú a escala 1:1,000,000. "
+            "Incluye: tipo de depósito, commodity principal, estatus, geometría "
+            "(puntos/polígonos). Fuente: INGEMMET GEOCATMIN. "
+            "Útil como instrumento espacial: distancia/proximidad a depósitos, "
+            "densidad de yacimientos por distrito, índice de potencial minero."
+        ),
+    },
+    {
+        "name": "GEOCATMIN — Catastro Minero (Concesiones)",
+        "service": "PSAD56_18/SERV_CATASTRO_MINERO_18/MapServer/WFSServer",
+        "type": "wfs",
+        "description": (
+            "Derechos mineros y concesiones vigentes en Perú. Incluye: titular, "
+            "área, fecha de otorgamiento, tipo de derecho, estado. "
+            "Fuente: INGEMMET GEOCATMIN."
+        ),
+    },
+]
+_INGEMMET_KEYWORDS = [
+    "mineria", "minería", "minero", "minera", "mineral", "mining",
+    "geologia", "geología", "geologico", "geológico", "yacimiento",
+    "deposito", "depósito", "metal", "cobre", "oro", "zinc", "plata",
+    "concesion", "concesión", "catastro minero", "ingemmet", "geocatmin",
+    "extractivo", "extractive", "recursos naturales", "natural resources",
+]
+
+
+def _search_ingemmet(topic: str, max_results: int = 2) -> list[dict]:
+    """Return INGEMMET GEOCATMIN spatial data candidates for mining/geology topics.
+
+    WFS endpoints serve vector layers consumable by geopandas/QGIS.
+    No API key — open OGC services. Requires `owslib` for download;
+    discovery works with requests alone.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _INGEMMET_KEYWORDS):
+        return []
+
+    results = []
+    for layer in _INGEMMET_LAYERS:
+        wfs_url = f"{_INGEMMET_WFS_BASE}/{layer['service']}"
+        results.append({
+            "name": layer["name"],
+            "provider": "INGEMMET GEOCATMIN (WFS)",
+            "url": "https://geocatmin.ingemmet.gob.pe/",
+            "download_url": wfs_url,
+            "download_format": "geojson",
+            "description": layer["description"][:300],
+            "source_api": "ingemmet",
+            "country": "Peru",
+            "data_types": ["spatial"],
+            "wfs_layer": layer["service"],
+            "requires_manual_acquisition": False,  # WFS is auto-downloadable
+            "extraction_tool": "owslib.wfs.WebFeatureService",
+        })
+        if len(results) >= max_results:
+            break
+
+    if results:
+        print(f"  [ingemmet] Spatial data candidates for '{topic}': {len(results)} layer(s)")
+    return results
+
+
+# ── MEF Consulta Amigable — manual reference catalog ─────────────────────────
+#
+# The MEF "Consulta Amigable" web portal (Consulta de Transferencias a los
+# Gobiernos Locales, Regionales y Nacionales) is the authoritative source for
+# mining canon, royalties, and fiscal transfers in Peru. It has NO public API
+# — data must be exported manually through the web UI.
+#
+# These curated references surface the portal URL and export instructions so
+# the pipeline can tell researchers exactly what to do. The entries carry
+# `requires_manual_acquisition: true` so Stage 1.5 / Stage 3.5 know to show
+# instructions rather than attempt automated download.
+_MEF_CONSULTA_AMIGABLE_REFERENCES: list[dict] = [
+    {
+        "name": "MEF Consulta Amigable — Canon Minero (Transferencias a Gobiernos Locales)",
+        "url": "https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx",
+        "description": (
+            "Transferencias de canon minero a municipalidades distritales y provinciales "
+            "del Perú. Datos anuales por distrito. Incluye: canon minero, canon "
+            "hidroenergético, canon pesquero, canon gasífero, canon forestal, "
+            "regalías mineras, FONCOMUN, FOCAM. "
+            "Exportar: seleccionar año → Gobiernos Locales → Canon Minero → "
+            "todos los departamentos → Exportar a Excel/CSV."
+        ),
+        "requires_manual_acquisition": True,
+        "export_instructions": (
+            "1. Ir a https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx\n"
+            "2. Seleccionar 'Gobiernos Locales' como nivel de gobierno\n"
+            "3. En 'Tipo de Transferencia', marcar 'Canon Minero'\n"
+            "4. Seleccionar el año deseado (repetir para cada año del panel)\n"
+            "5. En 'Departamento', seleccionar 'Todos'\n"
+            "6. Hacer clic en 'Consultar' y luego 'Exportar' → CSV/Excel\n"
+            "7. Guardar en data/external/mef/canon_minero_YYYY.csv"
+        ),
+    },
+    {
+        "name": "MEF Consulta Amigable — Canon y Sobrecanon (todos los tipos)",
+        "url": "https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx",
+        "description": (
+            "Transferencias totales por canon y sobrecanon a gobiernos subnacionales. "
+            "Incluye canon minero, gasífero, hidroenergético, pesquero, forestal, "
+            "y sobrecanon petrolero. Datos anuales por distrito/provincia/región. "
+            "Exportar como CSV desde el portal web."
+        ),
+        "requires_manual_acquisition": True,
+        "export_instructions": (
+            "1. Ir a https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx\n"
+            "2. Seleccionar nivel de gobierno (Local/Regional)\n"
+            "3. Marcar todos los tipos de canon y sobrecanon requeridos\n"
+            "4. Seleccionar año → Todos los departamentos → Consultar → Exportar CSV"
+        ),
+    },
+]
+_MEF_KEYWORDS = [
+    "canon", "transferencia", "mef", "consulta amigable", "regalias",
+    "regalías", "sobrecanon", "sobrecanón", "foncomun", "focam",
+    "ingresos fiscales", "fiscal transfers", "mining revenue",
+    "gobierno local", "municipalidad", "gobierno regional",
+]
+
+
+def _search_mef_consulta_amigable(topic: str, max_results: int = 2) -> list[dict]:
+    """Return MEF Consulta Amigable references for canon/transfer topics.
+
+    No API exists — these are manual-download references with export instructions.
+    Pipeline shows the link and instructions; user must download CSV manually.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _MEF_KEYWORDS):
+        return []
+
+    results = []
+    for ref in _MEF_CONSULTA_AMIGABLE_REFERENCES:
+        if any(k in topic_lower for k in _MEF_KEYWORDS):
+            results.append({
+                "name": ref["name"],
+                "provider": "MEF Consulta Amigable (manual)",
+                "url": ref["url"],
+                "download_url": "",  # no API
+                "download_format": "csv",
+                "description": ref["description"][:300],
+                "source_api": "mef_consulta_amigable",
+                "country": "Peru",
+                "data_types": ["panel"],
+                "requires_manual_acquisition": True,
+                "export_instructions": ref.get("export_instructions", ""),
+            })
+            if len(results) >= max_results:
+                break
+
+    if results:
+        print(f"  [mef] Canon/transfer references for '{topic}': {len(results)} "
+              f"source(s) — manual download (no API)")
+    return results
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # (End of Peru government data block)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3284,8 +3475,9 @@ def _likely_quality(candidate: dict) -> bool:
     # Strong positive signals: pre-validated provenance
     # bcrp + datosabiertos_curated are official Peruvian sources with known,
     # directly-downloadable structure (same tier as INEI government microdata).
+    # ingemmet is INGEMMET GEOCATMIN WFS — official Peruvian geological survey.
     if src in ("curated_registry", "journal", "inei", "bcrp",
-               "datosabiertos_curated", "minem"):
+               "datosabiertos_curated", "minem", "ingemmet"):
         return True
 
     # Dataverse: title must signal an academic replication archive
@@ -3425,6 +3617,8 @@ def _count_quality_candidates_for_variant(variant: str) -> dict:
     #   INEI    — survey microdata (cross-sections / panels)
     #   BCRP    — macro monthly time series (inflation, FX, GDP, rates, trade)
     #   Datos Abiertos — national open-data portal (CKAN search + curated CSVs)
+    #   INGEMMET — mining/geology spatial data (WFS)
+    #   MEF     — canon/transfer references (manual download, no API)
     if _is_peru_topic(variant):
         candidates.extend(_search_inei(variant, max_results=5))
         candidates.extend(_search_bcrp(variant, max_results=1))
@@ -3435,6 +3629,8 @@ def _count_quality_candidates_for_variant(variant: str) -> dict:
         candidates.extend(_search_ocds(variant, max_results=5))
         candidates.extend(_search_punku(variant, max_results=1))
         candidates.extend(_search_indecopi(variant, max_results=3))
+        candidates.extend(_search_ingemmet(variant, max_results=2))
+        candidates.extend(_search_mef_consulta_amigable(variant, max_results=2))
 
     n_total = len(candidates)
     n_high = sum(1 for c in candidates if _likely_quality(c))
@@ -3455,12 +3651,12 @@ def _rank_and_select_variant(counts: list[dict], original_topic: str) -> dict:
     sorted_counts = sorted(counts, key=lambda c: c["n_high_conf"], reverse=True)
 
     print(f"\n  TOPIC SUGGESTIONS (ranked by high-confidence quality datasets):")
-    print(f"  {'─' * 70}")
+    print(f"  {'-' * 70}")
     max_high = max((c["n_high_conf"] for c in sorted_counts), default=1) or 1
     for i, c in enumerate(sorted_counts, 1):
         bar_width = int(20 * c["n_high_conf"] / max_high)
-        bar = "█" * bar_width + " " * (20 - bar_width)
-        marker = " ← original" if c["variant"] == original_topic else ""
+        bar = "#" * bar_width + " " * (20 - bar_width)
+        marker = " <-- original" if c["variant"] == original_topic else ""
         print(f"  {i}. [{bar}] {c['n_high_conf']:>3} hi-conf "
               f"({c['n_total']:>3} total) — {c['variant'][:50]}{marker}")
     print()
@@ -3501,7 +3697,7 @@ def _validate_path_a_candidates(candidates: list[dict],
     # quality proxy then score_ceiling descending.
     def _rank_key(c):
         src = c.get("source_api", "")
-        if peru_topic and src in ("inei", "bcrp", "datosabiertos_curated", "minem"):
+        if peru_topic and src in ("inei", "bcrp", "datosabiertos_curated", "minem", "ingemmet"):
             return (0, 0)
         hi = 1 if _likely_quality(c) else 2
         return (hi, -(c.get("score_ceiling", 0) or 0))
@@ -3545,6 +3741,16 @@ def _validate_path_a_candidates(candidates: list[dict],
         elif src_api == "indecopi":
             print(f"       [indecopi] Manual fetch required — skipping automated download")
             continue  # no automated download; user must scrape manually
+        elif src_api == "ingemmet":
+            from .stage1_5_data_loading import _try_download_ingemmet
+            local_path = _try_download_ingemmet(c, data_dir)
+        elif src_api == "mef_consulta_amigable":
+            print(f"       [mef] Manual download — see export instructions")
+            instructions = c.get("export_instructions", "")
+            if instructions:
+                for line in instructions.split("\n"):
+                    print(f"       {line}")
+            continue  # manual download only
         elif src_api in ("datosabiertos_curated", "datosabiertos_peru") or "datosabiertos" in provider:
             from .stage1_5_data_loading import _try_download_datosabiertos
             local_path = _try_download_datosabiertos(c, data_dir)
