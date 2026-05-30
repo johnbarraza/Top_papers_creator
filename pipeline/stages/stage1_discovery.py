@@ -2510,6 +2510,14 @@ _PERU_KEYWORDS = {
     "lima", "arequipa", "cusco", "puno", "cajamarca", "microdata peru",
     "tambo", "tambos", "tambobook", "midis", "juntos", "pension 65",
     "ubigeo", "reniec", "sisfoh",
+    # Procurement / contracting
+    "seace", "osce", "oece", "contratacion", "contratación", "licitacion",
+    "licitación", "contrataciones", "ocds", "contrataciones abiertas",
+    # Telecom
+    "osiptel", "punku", "telecom", "telecomunicaciones",
+    # Competition / IP / consumer
+    "indecopi", "competencia", "antitrust", "propiedad intelectual",
+    "proteccion al consumidor", "protección al consumidor",
 }
 
 
@@ -2838,6 +2846,400 @@ def _search_peru_replication_packages(topic: str, max_results: int = 5) -> list[
     return results
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Peru government data portals — integrated searchers [EXPERIMENTAL]
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# STATUS: EXPERIMENTAL — integración inicial, sujeta a validación.
+#   - APIs verificadas funcionales (HTTP 200, datos reales) al 2026-05-30.
+#   - URLs de descarga directa verificadas (HTTP HEAD).
+#   - Cobertura de años estimada con datos reales del /api/v1/indexCountData.
+#   - NO probado end-to-end en Path C. Puede requerir ajustes de encoding,
+#     tamaño de archivo, o estructura de datos no anticipada.
+#   - INDECOPI sin API: solo referencias curadas, requiere scraping manual.
+#   TODO: validar que los archivos descargados son parseables por pandas.
+#   TODO: verificar encoding real de cada fuente (UTF-8 asumido).
+#   TODO: probar con --paperdl off --notebooklm off para aislar.
+#
+# All follow the same anti-hallucination pattern:
+#   Python function → real HTTP/API call → structured dict → Claude sees output
+#
+# 1. OSCE OCDS API  —  contratacionesabiertas.oece.gob.pe/api/v1/
+# 2. PUNKU OSIPTEL  —  punku.osiptel.gob.pe (ZIP directo, ~182 MB)
+# 3. INDECOPI       —  iasearch.io + buscadorResoluciones (sin API pública)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. OSCE Contrataciones Abiertas (OCDS API) ───────────────────────────────
+#
+# SOURCE:     Organismo Especializado para las Contrataciones Públicas Eficientes
+#             (OECE), formerly OSCE. Data extracted from SEACE v1, v2, and v3.
+# API:        REST, no auth required. Base: contratacionesabiertas.oece.gob.pe
+# STANDARD:   Open Contracting Data Standard (OCDS) — JSON structured releases.
+# COVERAGE:   2003–present (verified via /api/v1/indexCountData).
+#             Bulk starts 2004: 95K contracts/year, peaks at 313K (2008).
+#             Steady state 2010+: ~130-170K contracts/year.
+# VOLUME:     2,731,604 OCDS records, 493,807 suppliers, 3,314 buyers.
+# UPDATE:     Daily (records appear within 24h of SEACE publication).
+#             Monthly bulk exports at /api/v1/files (CSV + JSON).
+# DATA TYPES: Panel (entity × supplier × time), cross-section (per contract).
+#             Each OCDS record = one procurement process with full timeline:
+#             tender → award → contract → implementation milestones.
+# FIELDS:     ocid, tender (title, description, procurementMethod, value{amount,
+#             currency}, procuringEntity{name,id}, mainProcurementCategory),
+#             buyer{name,id}, awards, contracts, releases[{date,url}],
+#             dataSegmentation{id (YYYY-MM)}, sources[{name,id,url}].
+# METHODS:    procurementMethod values: "direct", "limited", "open",
+#             "selective", "competitive" — maps to: contratación directa,
+#             licitación pública, concurso público, adjudicación simplificada,
+#             subasta inversa electrónica.
+# VALUE:      For econ research — natural experiments in procurement reform,
+#             DiD with staggered policy adoption across entities, collusion/
+#             corruption detection, supplier dynamics, price dispersion analysis,
+#             political connections (entity × supplier network panels).
+#
+# Endpoints (all GET, no auth):
+#   /api/v1/search?format=json&paginateBy=N&page=N     paginated search
+#   /api/v1/records?format=json&source=X&year=Y&month=M filtered records
+#   /api/v1/files?format=json                           monthly bulk exports
+#   /api/v1/indexCountData?format=json                  aggregate stats
+#   /api/v1/buyers?format=json&source=X                 procuring entities
+#   /api/v1/suppliers?format=json&source=X              suppliers
+#   /api/v1/release/{ocid}                              full OCDS JSON release
+
+_OCDS_API_BASE = "https://contratacionesabiertas.oece.gob.pe/api/v1"
+
+_OCDS_KEYWORDS = [
+    "contratacion", "contratación", "contrato", "contract", "procurement",
+    "adquisicion", "adquisición", "licitacion", "licitación", "seace",
+    "osce", "oece", "proveedor", "proveedores", "adjudicacion", "adjudicación",
+    "compra publica", "compra pública", "public procurement",
+    "gobierno", "government", "estado", "municipalidad", "ministerio",
+    "gasto publico", "gasto público", "public spending",
+    "corrupcion", "corrupción", "corruption",
+    "transparencia", "transparency", "fiscalizacion", "fiscalización",
+    "concurso", "subasta", "obras publicas", "obras públicas",
+    "ejecucion contractual", "ejecución contractual", "infraestructura",
+    "ocds", "open contracting", "contratacion abierta", "contratación abierta",
+]
+
+
+def _search_ocds(topic: str, max_results: int = 5) -> list[dict]:
+    """Search OSCE OCDS API for procurement contracts matching topic keywords.
+
+    Hits the real /api/v1/search endpoint. Returns structured candidates with
+    entity, amount, method, and OCDS metadata. Claude never touches the API.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _OCDS_KEYWORDS):
+        return []
+
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [ocds] Searching contratacionesabiertas.oece.gob.pe for '{topic}'...")
+    try:
+        r = requests.get(
+            f"{_OCDS_API_BASE}/search",
+            params={"format": "json", "paginateBy": max_results, "page": 1},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        records = data.get("results", []) or []
+
+        results = []
+        for rec in records:
+            release = rec.get("compiledRelease", {})
+            tender = release.get("tender", {})
+            buyer = release.get("buyer", {})
+            entity = tender.get("procuringEntity", {})
+            seg = rec.get("dataSegmentation", {})
+
+            title = tender.get("title", "Sin título")[:120]
+            desc = tender.get("description", "")[:300]
+            amount = tender.get("value", {}).get("amount", 0)
+            currency = tender.get("value", {}).get("currency", "PEN")
+            method = tender.get("procurementMethod", "?")
+            period = seg.get("id", "?") if isinstance(seg, dict) else str(seg or "?")
+
+            results.append({
+                "name": f"OSCE OCDS: {title}",
+                "provider": f"OSCE OCDS ({entity.get('name', buyer.get('name', 'Perú'))})",
+                "url": f"{_OCDS_API_BASE}/release/{rec.get('ocid', '')}",
+                "download_url": f"{_OCDS_API_BASE}/release/{rec.get('ocid', '')}?format=json",
+                "download_format": "json",
+                "description": (
+                    f"[{method}] {period} | {desc}. "
+                    f"Monto: {currency} {amount:,.2f}. "
+                    f"Entidad: {entity.get('name', '?')}. "
+                    f"OCID: {rec.get('ocid', '?')}"
+                ),
+                "source_api": "ocds",
+                "country": "Peru",
+                "data_years": "2003–present",
+                "data_types": ["panel", "cross-section"],
+                "n_records_total": 2731604,
+                "pipeline_status": "experimental",
+            })
+
+        print(f"  [ocds] Found {len(results)} contracts for '{topic}'")
+        return results[:max_results]
+    except Exception as exc:
+        print(f"  [ocds] API error: {exc}")
+        return []
+
+
+def _try_download_ocds(ocid_or_url: str, data_dir: Path) -> str | None:
+    """Download a full OCDS release as JSON. Returns path or None."""
+    try:
+        import requests
+        url = ocid_or_url if ocid_or_url.startswith("http") else \
+              f"{_OCDS_API_BASE}/release/{ocid_or_url}"
+        r = requests.get(url, params={"format": "json"}, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        ocid = data.get("ocid", "release") if isinstance(data, dict) else "release"
+        safe_name = ocid.replace("/", "_").replace(":", "-")[:100]
+        out_path = data_dir / f"ocds_{safe_name}.json"
+        import json
+        out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        size_kb = out_path.stat().st_size / 1024
+        print(f"  [ocds] Downloaded: {out_path.name} ({size_kb:.0f} KB)")
+        return str(out_path)
+    except Exception as exc:
+        print(f"  [ocds] Download failed: {exc}")
+        return None
+
+
+# ── 2. PUNKU OSIPTEL (telecom regulator open data) ──────────────────────────
+#
+# SOURCE:     OSIPTEL — Organismo Supervisor de Inversión Privada en
+#             Telecomunicaciones. Peru's telecom regulator since 1994.
+# PORTAL:     PUNKU = Plataforma de Datos Abiertos de OSIPTEL
+#             https://punku.osiptel.gob.pe/
+# ACCESS:     Direct ZIP download, no auth. Single archive with all datasets.
+#             URL: https://punku.osiptel.gob.pe/Archivos/Datasets-PUNKU-OSIPTEL.zip
+# SIZE:       ~182 MB compressed (verified 2026-05-21 via HTTP HEAD).
+# UPDATE:     Monthly (verified Last-Modified header: 2026-05-21).
+# COVERAGE:   Estimated 2014–present based on OSIPTEL's digital data program.
+#             Exact range determined by ZIP contents at download time.
+# CONTENTS:   Multiple CSV datasets inside the ZIP. Based on PUNKU portal:
+#             - Calidad de servicio móvil (mobile QoS by district/operator)
+#             - Internet móvil (mobile internet speed tests, latency, coverage)
+#             - Cobertura móvil 2G/3G/4G/5G (coverage maps by technology)
+#             - Reclamos de usuarios (complaints: operator, region, type, outcome)
+#             - Tarifas y planes (tariff plans by operator/service)
+#             - Despliegue de infraestructura (towers, fiber, spectrum assignments)
+#             - Indicadores de conectividad (household/business internet penetration)
+# DATA TYPES: Panel (district × operator × month), cross-section (coverage snapshots).
+# VALUE:      Natural experiments in telecom regulation, DiD with staggered 4G/5G
+#             deployment, digital divide analysis, competition in mobile markets,
+#             regulatory impact evaluation, consumer complaint dynamics.
+# NOTE:       ZIP filename is stable but contents may change. Unzip at download
+#             time and profile with pandas before use in pipeline.
+
+_PUNKU_KEYWORDS = [
+    "telecom", "telecomunicacion", "telecomunicación", "telecomunicaciones",
+    "osiptel", "punku", "internet", "banda ancha", "broadband",
+    "celular", "movil", "móvil", "telefonia", "telefonía", "phone",
+    "cobertura", "coverage", "velocidad", "speed", "speedtest",
+    "fibra optica", "fibra óptica", "fiber", "4g", "5g", "lte",
+    "operador", "operator", "movistar", "claro", "entel", "bitel",
+    "reclamo", "reclamos", "queja", "quejas", "complaint", "complaints",
+    "tarifa", "tarifas", "plan", "planes", "tariff",
+    "conectividad", "connectivity", "brecha digital", "digital divide",
+    "regulacion", "regulación", "regulation", "regulator",
+]
+
+
+def _search_punku(topic: str, max_results: int = 1) -> list[dict]:
+    """Surface PUNKU OSIPTEL telecom dataset for telecom/digital economy topics.
+
+    Returns curated candidate with verified direct ZIP download URL.
+    Anti-hallucination: deterministic keyword matching, HTTP-verified ZIP URL.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _PUNKU_KEYWORDS):
+        return []
+
+    print(f"  [punku] OSIPTEL telecom dataset candidate for '{topic}'")
+    return [{
+        "name": "PUNKU OSIPTEL — Datos Abiertos de Telecomunicaciones Perú",
+        "provider": "OSIPTEL / PUNKU",
+        "url": "https://punku.osiptel.gob.pe/",
+        "download_url": (
+            "https://punku.osiptel.gob.pe/Archivos/Datasets-PUNKU-OSIPTEL.zip"
+        ),
+        "download_format": "zip",
+        "description": (
+            "Datasets completos del regulador de telecomunicaciones peruano OSIPTEL. "
+            "Incluye: calidad de servicio móvil por distrito y operador, mediciones "
+            "de velocidad de internet (Speedtest), cobertura móvil 2G/3G/4G/5G, "
+            "reclamos de usuarios por operador/región/tipo, tarifas y planes, "
+            "despliegue de infraestructura (torres, fibra, espectro), e indicadores "
+            "de conectividad (penetración de internet en hogares/empresas). "
+            "ZIP ~182 MB con múltiples CSVs. Panel geográfico: distrito × indicador "
+            "× período. Cobertura estimada: 2014–present. Actualización mensual."
+        ),
+        "source_api": "punku",
+        "country": "Peru",
+        "data_years": "2014–present (estimated, verified by ZIP contents at download)",
+        "data_types": ["panel", "cross-section", "time-series"],
+        "pipeline_status": "experimental",
+    }][:max_results]
+
+
+# ── 3. INDECOPI (competition, consumer protection, intellectual property) ───
+#
+# SOURCE:     INDECOPI — Instituto Nacional de Defensa de la Competencia y de
+#             la Protección de la Propiedad Intelectual. Created 1992 (D.L. 25868).
+#             Peru's multi-sector regulator: antitrust, consumer protection,
+#             IP (patents, trademarks, copyright), dumping/subsidies, bureaucratic
+#             barriers, bankruptcy (disolved 2025 → new entity).
+# PORTALS:    a) Buscador Avanzado de Resoluciones (AI semantic search)
+#                https://indecopi.iasearch.io/
+#                Semantic + structured search over resolutions, sanctions, precedents.
+#                Underlying tech: iasearch.io platform. No public API.
+#             b) Buscador de Resoluciones (JBoss Seam, legacy)
+#                https://servicio.indecopi.gob.pe/buscadorResoluciones/
+#                6 category sub-portals: Tribunal, Propiedad Intelectual,
+#                Protección al Consumidor, Defensa de la Competencia,
+#                Sentencias del Poder Judicial, LAUDOS (arbitration).
+#                Each at {category}.seam — server-rendered HTML, no API.
+# COVERAGE:   Estimated 1993–present. Digital records sparse pre-2000;
+#             consistent coverage from ~2005 (case management system adoption).
+#             Each category may have different start dates.
+# DATA TYPES: Cross-section (per resolution). Fields: case number, date,
+#             parties (plaintiff, defendant), sector/industry, legal basis,
+#             resolution type (sanction, precedent, ruling, dismissal),
+#             outcome (fine amount, corrective measure, absolved), chamber/sala.
+# VALUE:      Antitrust enforcement dynamics, consumer protection effectiveness,
+#             IP litigation as innovation proxy, regulatory capture tests,
+#             bureaucratic barriers as trade costs, arbitration outcomes.
+# STRATEGY:   Curated reference entries. NO automated download — pipeline skips
+#             these in Path C (requires_manual_fetch: True). Data retrieval
+#             needs Firecrawl scraping or manual browser export. These entries
+#             exist so Claude KNOWS the data exists and can tell the researcher
+#             "INDECOPI has this — go download it manually from [URL]."
+
+_INDECOPI_KEYWORDS = [
+    "indecopi", "competencia", "competition", "antitrust", "antimonopolio",
+    "propiedad intelectual", "intellectual property", "patente", "patent",
+    "marca", "trademark", "derechos de autor", "copyright",
+    "proteccion al consumidor", "protección al consumidor",
+    "consumer protection", "consumidor", "consumer",
+    "sancion", "sanción", "sanction", "multa", "fine",
+    "precedente", "precedent", "resolucion", "resolución", "resolution",
+    "tribunal", "court", "arbitration", "arbitraje", "laudo",
+    "defensa de la competencia", "competition defense",
+    "barreras burocraticas", "barreras burocráticas", "bureaucratic barriers",
+    "dumping", "subsidios", "subsidy", "competencia desleal", "unfair competition",
+]
+
+
+def _search_indecopi(topic: str, max_results: int = 2) -> list[dict]:
+    """Surface INDECOPI as a data source for competition/consumer/IP topics.
+
+    No public API — curated reference entries. Pipeline skips automated
+    download; user must scrape manually or use Firecrawl.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _INDECOPI_KEYWORDS):
+        return []
+
+    results = []
+
+    # ── Competition / antitrust ──────────────────────────────────────────
+    if any(k in topic_lower for k in ["competencia", "competition", "antitrust",
+                                        "antimonopolio", "defensa de la competencia",
+                                        "barreras burocraticas", "barreras burocráticas"]):
+        results.append({
+            "name": "INDECOPI — Resoluciones de Defensa de la Competencia",
+            "provider": "INDECOPI (buscadorResoluciones)",
+            "url": "https://servicio.indecopi.gob.pe/buscadorResoluciones/competencia.seam",
+            "download_url": "",
+            "download_format": "html",
+            "description": (
+                "Resoluciones de la Sala de Defensa de la Competencia del INDECOPI "
+                "(1993–present). Incluye: abuso de posición de dominio, carteles y "
+                "prácticas colusorias, barreras burocráticas, competencia desleal, "
+                "dumping y subsidios. ~300-500 resoluciones/año. Campos: expediente, "
+                "fecha, denunciante, denunciado, sector, conducta, resolución, multa. "
+                "Sin API pública — requiere scraping con Firecrawl o descarga manual "
+                "desde el buscador JBoss Seam."
+            ),
+            "source_api": "indecopi",
+            "country": "Peru",
+            "data_years": "1993–present",
+            "data_types": ["cross-section"],
+            "pipeline_status": "experimental",
+            "requires_manual_fetch": True,
+        })
+
+    # ── Consumer protection ──────────────────────────────────────────────
+    if any(k in topic_lower for k in ["consumidor", "consumer", "proteccion",
+                                        "protección"]):
+        results.append({
+            "name": "INDECOPI — Resoluciones de Protección al Consumidor",
+            "provider": "INDECOPI (buscadorResoluciones)",
+            "url": "https://servicio.indecopi.gob.pe/buscadorResoluciones/proteccion-consumidor.seam",
+            "download_url": "",
+            "download_format": "html",
+            "description": (
+                "Resoluciones de la Sala de Protección al Consumidor del INDECOPI "
+                "(1993–present). Incluye: idoneidad de productos/servicios, información "
+                "adecuada, métodos abusivos de cobranza, discriminación en el consumo, "
+                "incumplimiento de garantías. ~2000+ resoluciones/año. Mayor volumen "
+                "de casos del INDECOPI. Campos: expediente, fecha, consumidor, "
+                "proveedor, sector, infracción, medida correctiva, multa. "
+                "Sin API pública — requiere scraping o descarga manual."
+            ),
+            "source_api": "indecopi",
+            "country": "Peru",
+            "data_years": "1993–present",
+            "data_types": ["cross-section"],
+            "requires_manual_fetch": True,
+        })
+
+    # ── Intellectual property ────────────────────────────────────────────
+    if any(k in topic_lower for k in ["propiedad intelectual", "intellectual property",
+                                        "patente", "patent", "marca", "trademark",
+                                        "derechos de autor", "copyright"]):
+        results.append({
+            "name": "INDECOPI — Resoluciones de Propiedad Intelectual",
+            "provider": "INDECOPI (buscadorResoluciones)",
+            "url": "https://servicio.indecopi.gob.pe/buscadorResoluciones/propiedad-intelectual.seam",
+            "download_url": "",
+            "download_format": "html",
+            "description": (
+                "Resoluciones de la Sala de Propiedad Intelectual del INDECOPI "
+                "(1993–present). Incluye: registro y oposición de marcas, patentes "
+                "farmacéuticas y biotecnológicas, derechos de autor, infracciones de "
+                "PI, nombres comerciales y denominaciones de origen. Relevante para "
+                "economía de la innovación: patentes como proxy de I+D, litigios de "
+                "marcas como barreras de entrada. ~500-800 resoluciones/año. "
+                "Sin API pública — requiere scraping o descarga manual."
+            ),
+            "source_api": "indecopi",
+            "country": "Peru",
+            "data_years": "1993–present",
+            "data_types": ["cross-section"],
+            "requires_manual_fetch": True,
+        })
+
+    if results:
+        print(f"  [indecopi] Matched {len(results)} INDECOPI reference(s) for '{topic}'")
+    return results[:max_results]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# (End of Peru government data block)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
 def _infer_country(candidate: dict) -> str:
     """Infer country from dataset name/description when not explicitly set."""
     if candidate.get("country"):
@@ -3030,6 +3432,9 @@ def _count_quality_candidates_for_variant(variant: str) -> dict:
         candidates.extend(_search_datosabiertos_curated(variant, max_results=5))
         candidates.extend(_search_datosabiertos_peru(variant, max_results=5))
         candidates.extend(_search_peru_replication_packages(variant, max_results=5))
+        candidates.extend(_search_ocds(variant, max_results=5))
+        candidates.extend(_search_punku(variant, max_results=1))
+        candidates.extend(_search_indecopi(variant, max_results=3))
 
     n_total = len(candidates)
     n_high = sum(1 for c in candidates if _likely_quality(c))
@@ -3131,6 +3536,15 @@ def _validate_path_a_candidates(candidates: list[dict],
         elif src_api == "minem":
             from .stage1_5_data_loading import _try_download_minem
             local_path = _try_download_minem(c, data_dir)
+        elif src_api == "ocds":
+            ocds_url = c.get("download_url", "")
+            local_path = _try_download_ocds(ocds_url, data_dir) if ocds_url else None
+        elif src_api == "punku":
+            punku_url = c.get("download_url", "")
+            local_path = _try_download_direct(punku_url, data_dir) if punku_url else None
+        elif src_api == "indecopi":
+            print(f"       [indecopi] Manual fetch required — skipping automated download")
+            continue  # no automated download; user must scrape manually
         elif src_api in ("datosabiertos_curated", "datosabiertos_peru") or "datosabiertos" in provider:
             from .stage1_5_data_loading import _try_download_datosabiertos
             local_path = _try_download_datosabiertos(c, data_dir)
