@@ -4,6 +4,7 @@ Generates 8-10 research ideas from seed papers, scores them, and selects the top
 """
 
 import json
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,66 @@ from ..claude_runner import run_claude
 from ..json_utils import extract_json
 from ..state import save_state
 from ..paper_searcher import PaperSearcher, is_paperdl_available, PAPERDL_SOURCES, _resolve_paperdl_mode
+
+
+# ---------------------------------------------------------------------------
+# Known public Peruvian datasets — used to auto-detect data availability
+# ---------------------------------------------------------------------------
+
+_KNOWN_PUBLIC_PERU = {
+    # INEI surveys
+    "enaho", "endes", "epen", "cenagro", "enapres", "renamu", "eea",
+    "encuesta nacional de hogares", "encuesta demografica", "encuesta de empleo",
+    "inei", "microdatos inei",
+    # Government portals
+    "datosabiertos.gob.pe", "datos abiertos peru", "midis", "minedu", "escale",
+    "minem", "osce", "ocds", "bcrp", "sbs", "osiptel", "punku",
+    "consulta amigable", "siaf", "ministerio de educacion", "ministerio de economia",
+    "fissal", "essalud", "minsa", "ipress",
+    # International with Peru data
+    "world bank peru", "banco mundial peru", "iadb peru", "bid peru",
+    "cepal peru", "eclac peru",
+}
+
+# Method keywords → canonical method name
+_METHOD_KEYWORDS = {
+    "difference-in-differences": ["diff-in-diff", "difference-in-differences",
+                                   "difference in difference", "differences-in-differences",
+                                   "diferencias en diferencias", "diference en diferencias",
+                                   " did ", "didactic"],
+    "regression discontinuity": ["rdd", "regression discontinuity", "discontinuity design",
+                                  "discontinuidad en regresion", "regresion discontinua"],
+    "instrumental variables": ["instrumental variable", "iv estimation", "two-stage least squares",
+                                "2sls", "tsls", "variables instrumentales"],
+    "randomized controlled trial": ["rct", "randomized", "randomised", "experimento aleatorio",
+                                     "field experiment", "experimento de campo"],
+    "event study": ["event study", "estudio de evento"],
+    "synthetic control": ["synthetic control", "control sintetico"],
+    "double machine learning": ["dml", "double machine learning", "debiased machine learning",
+                                 "partially linear"],
+    "causal forest": ["causal forest", "generalized random forest", "grf", "econml"],
+    "panel fixed effects": ["fixed effects", "twfe", "two-way fixed effects", "efectos fijos",
+                             "panel data", "datos de panel"],
+    "matching": ["propensity score matching", "psm", "matching estimator", "apareamiento"],
+    "ols": ["ordinary least squares", "ols regression", "linear regression",
+             "minimos cuadrados ordinarios"],
+}
+
+# Score by method identification strength (0-10)
+_METHOD_SCORES = {
+    "randomized controlled trial": 10,
+    "instrumental variables": 9,
+    "regression discontinuity": 9,
+    "difference-in-differences": 8,
+    "synthetic control": 8,
+    "event study": 7,
+    "double machine learning": 7,
+    "causal forest": 7,
+    "panel fixed effects": 5,
+    "matching": 5,
+    "ols": 3,
+    "unknown": 2,
+}
 
 
 def run(project_dir: Path, state: dict) -> dict:
@@ -179,8 +240,135 @@ def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict
     return deduped
 
 
+def _detect_method_from_text(text: str) -> str:
+    """Fast keyword scan on abstract/title — no LLM needed for clear cases."""
+    lower = text.lower()
+    for method, keywords in _METHOD_KEYWORDS.items():
+        if any(kw in lower for kw in keywords):
+            return method
+    return "unknown"
+
+
+def _detect_public_data_from_text(text: str) -> tuple[bool, str]:
+    """Return (is_public, matched_source) based on known public dataset keywords."""
+    lower = text.lower()
+    for kw in _KNOWN_PUBLIC_PERU:
+        if kw in lower:
+            return True, kw
+    # Generic public signals
+    for sig in ("open data", "publicly available", "public dataset",
+                "datos abiertos", "datos públicos", "harvard dataverse",
+                "icpsr", "zenodo", "openicpsr", "aea data"):
+        if sig in lower:
+            return True, sig
+    return False, ""
+
+
+def _replicate_score(paper: dict) -> float:
+    """Score a candidate for replication suitability (0–10).
+
+    Weights: method strength 0.4 + data public 0.4 + citation signal 0.2
+    """
+    method = paper.get("_method", "unknown")
+    method_score = _METHOD_SCORES.get(method, 2)
+
+    data_public = paper.get("_data_public", False)
+    has_oa_pdf = bool((paper.get("openAccessPdf") or {}).get("url"))
+    has_pkg = bool(paper.get("replication_package_url"))
+    data_score = 10 if (data_public or has_pkg) else (5 if has_oa_pdf else 1)
+
+    cites = paper.get("citationCount", paper.get("citations", 0)) or 0
+    # log-scale: 0 cites→0, 10→3.3, 100→6.6, 1000→10
+    cite_score = min(10, math.log1p(cites) / math.log1p(1000) * 10)
+
+    return round(0.4 * method_score + 0.4 * data_score + 0.2 * cite_score, 2)
+
+
+def _enrich_with_method_and_data(papers: list[dict]) -> list[dict]:
+    """Enrich candidate papers with method, dataset, and public-data detection.
+
+    Step 1: Fast keyword scan (no LLM) fills _method, _data_public, _data_source.
+    Step 2: ONE Claude call (sonnet, low effort) for top 15 candidates to fill gaps
+            and extract the dataset name from the abstract.
+    Step 3: Compute _replicate_score for ranking.
+    Falls back to keyword-only if Claude call fails.
+    """
+    enriched = []
+    for p in papers:
+        text = " ".join([
+            p.get("title", ""),
+            p.get("abstract", ""),
+            p.get("venue", ""),
+        ])
+        method = _detect_method_from_text(text)
+        is_public, source_kw = _detect_public_data_from_text(text)
+        p = dict(p)  # shallow copy — don't mutate caller's list
+        p.setdefault("_method", method)
+        p.setdefault("_data_public", is_public)
+        p.setdefault("_data_source_kw", source_kw)
+        p.setdefault("_dataset_name", source_kw or "")
+        enriched.append(p)
+
+    # ── LLM enrichment for top 15 (fills dataset name + corrects method) ──
+    top = enriched[:15]
+    abstracts_block = "\n\n".join(
+        f"[{i}] Title: {p.get('title', 'N/A')}\n"
+        f"    Abstract: {(p.get('abstract') or '')[:400]}"
+        for i, p in enumerate(top, 1)
+    )
+    prompt = f"""For each paper below extract: (1) the primary empirical method,
+(2) the main dataset used, (3) whether that dataset is publicly available.
+
+Be concise. If the abstract doesn't mention data explicitly, infer from context.
+Mark data as public if it's a national survey, government administrative data,
+open registry, or available via a public repository.
+
+{abstracts_block}
+
+Return ONLY a JSON array (length {len(top)}), one object per paper in order:
+```json
+[
+  {{
+    "idx": 1,
+    "method": "difference-in-differences",
+    "dataset_name": "ENAHO Peru",
+    "data_public": true,
+    "data_note": "INEI public microdata"
+  }}
+]
+```
+Allowed method values: {', '.join(_METHOD_SCORES.keys())}
+"""
+    try:
+        response = run_claude(prompt, model="haiku", effort="low")
+        parsed = extract_json(response)
+        if isinstance(parsed, list):
+            for item in parsed:
+                idx = item.get("idx", 0)
+                if 1 <= idx <= len(top):
+                    p = top[idx - 1]
+                    if item.get("method") in _METHOD_SCORES:
+                        p["_method"] = item["method"]
+                    if item.get("dataset_name"):
+                        p["_dataset_name"] = item["dataset_name"]
+                    if "data_public" in item:
+                        p["_data_public"] = bool(item["data_public"])
+                    if item.get("data_note"):
+                        p["_data_note"] = item["data_note"]
+    except Exception as exc:
+        print(f"  [enrich] LLM enrichment skipped: {exc}")
+
+    # ── Compute replicate_score for all ──
+    for p in enriched:
+        p["_replicate_score"] = _replicate_score(p)
+
+    # Sort by score descending so best candidates appear first
+    enriched.sort(key=lambda x: x["_replicate_score"], reverse=True)
+    return enriched
+
+
 def _display_and_choose_paper(papers: list[dict]) -> dict:
-    """Show candidate papers and return the selected one."""
+    """Show enriched candidate papers ranked by replicate score and return selected."""
     if not papers:
         return {
             "title": "User topic replication target",
@@ -194,26 +382,52 @@ def _display_and_choose_paper(papers: list[dict]) -> dict:
             "source": "fallback",
         }
 
-    print("\n  Replication candidates:")
-    for i, p in enumerate(papers[:10], 1):
-        authors = p.get("authors") or "Unknown authors"
+    display = papers[:10]
+    best_idx = 0  # index in display of highest score (already sorted)
+
+    print("\n  ┌─ Replication candidates (ranked by method strength × data availability) ─┐")
+    for i, p in enumerate(display, 1):
+        title = p.get("title", "Untitled")[:80]
+        authors = (p.get("authors") or "Unknown")[:40]
         year = p.get("year") or "n.d."
-        cites = p.get("citationCount", p.get("citations", 0))
-        title = p.get("title", "Untitled")
-        print(f"  [{i}] {title[:95]}")
-        print(f"      {authors} ({year}) | citations: {cites} | {p.get('source', '?')}")
+        cites = p.get("citationCount", p.get("citations", 0)) or 0
+        method = p.get("_method", "unknown")
+        dataset = p.get("_dataset_name") or p.get("_data_source_kw") or "?"
+        score = p.get("_replicate_score", 0.0)
+        data_public = p.get("_data_public", False)
+        has_pkg = bool(p.get("replication_package_url"))
+        has_oa = bool((p.get("openAccessPdf") or {}).get("url"))
+        data_note = p.get("_data_note", "")
+
+        # Build data badge
+        if data_public or has_pkg:
+            data_badge = "DATA PÚBLICA ✓"
+        elif has_oa:
+            data_badge = "OA PDF ✓"
+        else:
+            data_badge = "data no verificada"
+
+        star = " ★ RECOMENDADO" if i == best_idx + 1 else ""
+        print(f"\n  [{i}] {title}{star}")
+        print(f"      {authors} ({year}) | citas: {cites}")
+        print(f"      Método: {method:<30} Score: {score:.1f}/10")
+        print(f"      Dataset: {dataset:<30} [{data_badge}]")
+        if data_note:
+            print(f"      Nota: {data_note[:80]}")
+
+    print("  └──────────────────────────────────────────────────────────────────────────┘")
 
     if not sys.stdin.isatty():
-        print("  [replication] Non-interactive run: selecting candidate 1.")
-        return papers[0]
+        print(f"  [replication] Non-interactive: selecting candidate 1 (score {display[0].get('_replicate_score', 0):.1f}).")
+        return display[0]
 
     while True:
-        choice = input("\n  Select paper number [1]: ").strip()
+        choice = input(f"\n  Selecciona número de paper [1={display[0].get('title','')[:30]}...]: ").strip()
         if not choice:
-            return papers[0]
-        if choice.isdigit() and 1 <= int(choice) <= min(len(papers), 10):
-            return papers[int(choice) - 1]
-        print("  Enter a valid candidate number.")
+            return display[0]
+        if choice.isdigit() and 1 <= int(choice) <= len(display):
+            return display[int(choice) - 1]
+        print("  Ingresa un número válido.")
 
 
 def _fetch_paper_content(paper: dict, project_dir: Path, mode: str = "auto") -> dict:
@@ -371,6 +585,8 @@ def _run_replication_mode(project_dir: Path, state: dict) -> dict:
     topic = stage1.get("topic", "academic research")
     mode = _resolve_mode(state)
     candidates = _collect_replication_candidates(project_dir, state)
+    print(f"  [enrich] Analyzing {len(candidates)} candidates for method + data availability…")
+    candidates = _enrich_with_method_and_data(candidates)
     chosen_paper = _display_and_choose_paper(candidates)
     paper_content = _fetch_paper_content(chosen_paper, project_dir, mode=mode)
     data_context = _replication_data_context(state)
