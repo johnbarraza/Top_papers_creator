@@ -3014,6 +3014,367 @@ def _search_i4replication(topic: str, max_results: int = 10) -> list[dict]:
     return results
 
 
+# ── OpenICPSR replication packages ───────────────────────────────────────────
+#
+# SOURCE:  openicpsr.org — AEA, NBER, and journal replication packages
+# API:     Dataverse-based instance; search via /openicpsr/api/search
+# NOTES:   Free, no auth required. Returns dataset-level metadata including
+#          DOI, description, and direct download links where available.
+#          Only activated when stage2_mode == "replicate".
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _search_openicpsr(topic: str, max_results: int = 8) -> list[dict]:
+    """Search OpenICPSR for replication packages matching topic.
+
+    OpenICPSR is a Dataverse instance hosting AEA and journal replication
+    packages. Returns candidates with source="openicpsr" and has_public_data=True.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [openicpsr] Searching replication packages for '{topic[:60]}'...")
+    try:
+        r = requests.get(
+            "https://www.openicpsr.org/openicpsr/api/search",
+            params={
+                "q": topic,
+                "type": "dataset",
+                "per_page": max_results,
+                "sort": "score",
+                "order": "desc",
+            },
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        print(f"  [openicpsr] Search failed: {exc}")
+        return []
+
+    items = data.get("data", {}).get("items", []) or []
+    if not items:
+        # Some Dataverse installs wrap differently
+        items = data.get("items", data.get("data", []))
+        if not isinstance(items, list):
+            items = []
+
+    results = []
+    for item in items[:max_results]:
+        name = item.get("name", "") or item.get("title", "") or ""
+        if not name:
+            continue
+        doi = item.get("global_id", "") or item.get("identifier", "") or ""
+        url = item.get("url", "") or (f"https://doi.org/{doi}" if doi else "")
+        description = item.get("description", "") or ""
+        authors_raw = item.get("authors", []) or []
+        if isinstance(authors_raw, list):
+            authors_str = ", ".join(
+                (a.get("name", a) if isinstance(a, dict) else str(a))
+                for a in authors_raw[:3]
+            )
+            if len(authors_raw) > 3:
+                authors_str += " et al."
+        else:
+            authors_str = str(authors_raw)
+
+        pub_date = item.get("published_at", "") or item.get("createdAt", "") or ""
+        year = pub_date[:4] if pub_date else None
+
+        results.append({
+            "title": name,
+            "authors": authors_str,
+            "year": year,
+            "venue": "OpenICPSR",
+            "citationCount": 0,
+            "abstract": description[:500],
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {"DOI": doi} if doi else {},
+            "source": "openicpsr",
+            "has_public_data": True,
+            "_data_public": True,
+            "_data_source_kw": "openicpsr replication package",
+        })
+
+    print(f"  [openicpsr] Found {len(results)} replication package(s)")
+    return results
+
+
+# ── ALICIA — Peru national open access repository ────────────────────────────
+#
+# SOURCE:  alicia.concytec.gob.pe — Acceso Libre a Información Científica
+# API:     VuFind REST API v1 at /vufind/api/v1/search
+# NOTES:   Free, no auth. Indexes Peruvian university and research papers.
+#          Enriched via Semantic Scholar for citation counts + abstracts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _search_alicia(topic: str, max_results: int = 8) -> list[dict]:
+    """Search ALICIA (CONCYTEC Peru) for Peruvian academic papers matching topic.
+
+    Uses VuFind REST API. Returns candidates with source="alicia".
+    Enriches found titles via Semantic Scholar for richer metadata.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [alicia] Searching Peruvian papers for '{topic[:60]}'...")
+    raw_titles: list[tuple[str, str, str]] = []  # (title, authors, url)
+
+    try:
+        r = requests.get(
+            "https://alicia.concytec.gob.pe/vufind/api/v1/search",
+            params={
+                "q": topic,
+                "type": "AllFields",
+                "limit": max_results,
+                "field[]": ["title", "author", "id", "urls", "publishDate"],
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        for rec in data.get("records", []) or []:
+            title = rec.get("title", "") or ""
+            if not title:
+                continue
+            authors_list = rec.get("author", []) or []
+            if isinstance(authors_list, str):
+                authors_list = [authors_list]
+            authors_str = ", ".join(authors_list[:3])
+            if len(authors_list) > 3:
+                authors_str += " et al."
+            urls = rec.get("urls", []) or []
+            url = urls[0].get("url", "") if urls and isinstance(urls[0], dict) else (urls[0] if urls else "")
+            raw_titles.append((title, authors_str, url))
+    except Exception as exc:
+        print(f"  [alicia] API failed: {exc}")
+
+    if not raw_titles:
+        print(f"  [alicia] No results")
+        return []
+
+    print(f"  [alicia] {len(raw_titles)} raw hits — enriching via Semantic Scholar")
+
+    results = []
+    for title, authors_str, url in raw_titles[:max_results]:
+        try:
+            r2 = requests.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={
+                    "query": title,
+                    "limit": 1,
+                    "fields": "title,authors,year,venue,citationCount,abstract,url,openAccessPdf,externalIds",
+                },
+                timeout=15,
+            )
+            r2.raise_for_status()
+            hits = r2.json().get("data", []) or []
+            if hits:
+                p = hits[0]
+                oa = p.get("openAccessPdf") or {}
+                a_list = p.get("authors", []) or []
+                a_str = ", ".join(a.get("name", "") for a in a_list[:3])
+                if len(a_list) > 3:
+                    a_str += " et al."
+                results.append({
+                    "title": p.get("title") or title,
+                    "authors": a_str or authors_str,
+                    "year": p.get("year"),
+                    "venue": p.get("venue", "") or "ALICIA",
+                    "citationCount": p.get("citationCount", 0) or 0,
+                    "abstract": p.get("abstract") or "",
+                    "url": p.get("url") or url,
+                    "openAccessPdf": oa,
+                    "externalIds": p.get("externalIds") or {},
+                    "source": "alicia",
+                    "_peru_repo": True,
+                    "_data_source_kw": "alicia concytec peru",
+                })
+                continue
+        except Exception:
+            pass
+        # Fallback: return raw ALICIA metadata without S2 enrichment
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": None,
+            "venue": "ALICIA",
+            "citationCount": 0,
+            "abstract": "",
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {},
+            "source": "alicia",
+            "_peru_repo": True,
+            "_data_source_kw": "alicia concytec peru",
+        })
+
+    print(f"  [alicia] {len(results)} enriched candidates")
+    return results
+
+
+# ── DSpace Peru repositories (PUCP, UP, repositorio.concytec) ────────────────
+#
+# SOURCE:  University and CONCYTEC DSpace repositories
+# API:     DSpace 7 REST: /server/api/discover/search/objects?query=...
+#          DSpace 6 REST: /rest/items?q=...  (fallback)
+# NOTES:   Free, no auth. Search is full-text over metadata fields.
+#          Used for seed-paper discovery in replicate mode for Peru-focused work.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PERU_DSPACE_PORTALS = [
+    {
+        "label": "PUCP Repositorio",
+        "base": "https://repositorio.pucp.edu.pe",
+        "search_path": "/search",  # web search fallback
+    },
+    {
+        "label": "UP Repositorio",
+        "base": "https://repositorio.up.edu.pe",
+        "search_path": "/search",
+    },
+    {
+        "label": "Repositorio CONCYTEC",
+        "base": "https://repositorio.concytec.gob.pe",
+        "search_path": "/search",
+    },
+]
+
+
+def _search_dspace_portal(base_url: str, portal_label: str,
+                           topic: str, max_results: int = 5) -> list[dict]:
+    """Search a single DSpace 7 repository for papers matching topic.
+
+    Tries DSpace 7 REST API first, falls back to DSpace 6, returns [] on failure.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [{portal_label}] Searching for '{topic[:50]}'...")
+
+    # DSpace 7 REST API
+    results = []
+    try:
+        r = requests.get(
+            f"{base_url.rstrip('/')}/server/api/discover/search/objects",
+            params={
+                "query": topic,
+                "dsoType": "ITEM",
+                "size": max_results,
+                "embed": "item",
+            },
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        embedded = (data.get("_embedded", {}) or {}).get("searchResult", {}) or {}
+        items_wrap = (embedded.get("_embedded", {}) or {}).get("objects", []) or []
+        for obj in items_wrap[:max_results]:
+            item = (obj.get("_embedded", {}) or {}).get("indexableObject", {}) or {}
+            name = item.get("name", "") or ""
+            if not name:
+                continue
+            handle = item.get("handle", "") or ""
+            item_url = f"{base_url.rstrip('/')}/handle/{handle}" if handle else base_url
+            metadata = item.get("metadata", {}) or {}
+
+            def _meta(field: str) -> str:
+                vals = metadata.get(field, []) or []
+                return vals[0].get("value", "") if vals else ""
+
+            authors_str = _meta("dc.contributor.author") or _meta("dc.creator")
+            year_str = (_meta("dc.date.issued") or _meta("dc.date.created") or "")[:4]
+
+            results.append({
+                "title": name,
+                "authors": authors_str,
+                "year": int(year_str) if year_str.isdigit() else None,
+                "venue": portal_label,
+                "citationCount": 0,
+                "abstract": _meta("dc.description.abstract")[:400],
+                "url": item_url,
+                "openAccessPdf": {},
+                "externalIds": {},
+                "source": "dspace_peru",
+                "_peru_repo": True,
+                "_portal": portal_label,
+                "_data_source_kw": f"{portal_label.lower()} peru",
+            })
+    except Exception as exc:
+        print(f"  [{portal_label}] DSpace 7 API failed: {exc}")
+
+    if not results:
+        # DSpace 6 fallback
+        try:
+            r6 = requests.get(
+                f"{base_url.rstrip('/')}/rest/items",
+                params={"q": topic, "limit": max_results, "expand": "metadata"},
+                headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+                timeout=20,
+            )
+            r6.raise_for_status()
+            for item in (r6.json() or [])[:max_results]:
+                name = item.get("name", "") or ""
+                if not name:
+                    continue
+                handle = item.get("handle", "") or ""
+                item_url = f"{base_url.rstrip('/')}/handle/{handle}" if handle else base_url
+                meta_list = item.get("metadata", []) or []
+
+                def _meta6(key: str) -> str:
+                    for m in meta_list:
+                        if m.get("key") == key:
+                            return m.get("value", "")
+                    return ""
+
+                authors_str = _meta6("dc.contributor.author") or _meta6("dc.creator")
+                year_str = (_meta6("dc.date.issued") or "")[:4]
+                results.append({
+                    "title": name,
+                    "authors": authors_str,
+                    "year": int(year_str) if year_str.isdigit() else None,
+                    "venue": portal_label,
+                    "citationCount": 0,
+                    "abstract": _meta6("dc.description.abstract")[:400],
+                    "url": item_url,
+                    "openAccessPdf": {},
+                    "externalIds": {},
+                    "source": "dspace_peru",
+                    "_peru_repo": True,
+                    "_portal": portal_label,
+                    "_data_source_kw": f"{portal_label.lower()} peru",
+                })
+        except Exception as exc2:
+            print(f"  [{portal_label}] DSpace 6 fallback failed: {exc2}")
+
+    print(f"  [{portal_label}] {len(results)} result(s)")
+    return results
+
+
+def _search_peru_dspace_repos(topic: str, max_results_each: int = 4) -> list[dict]:
+    """Search all configured Peru DSpace portals (PUCP, UP, CONCYTEC)."""
+    all_results: list[dict] = []
+    for portal in _PERU_DSPACE_PORTALS:
+        try:
+            all_results.extend(
+                _search_dspace_portal(
+                    portal["base"], portal["label"], topic, max_results_each
+                )
+            )
+        except Exception:
+            continue
+    return all_results
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Peru government data portals — integrated searchers [EXPERIMENTAL]
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4263,6 +4624,21 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
         seed_papers.extend(_search_i4replication(selected["variant"], max_results=10))
         if selected["variant"] != topic:
             seed_papers.extend(_search_i4replication(topic, max_results=5))
+
+        # OpenICPSR replication packages (AEA, NBER, journals) — replicate only
+        seed_papers.extend(_search_openicpsr(selected["variant"], max_results=8))
+        if selected["variant"] != topic:
+            seed_papers.extend(_search_openicpsr(topic, max_results=4))
+
+        # Peru DSpace repositories (PUCP, UP, CONCYTEC) — replicate only
+        seed_papers.extend(_search_peru_dspace_repos(selected["variant"], max_results_each=4))
+        if selected["variant"] != topic:
+            seed_papers.extend(_search_peru_dspace_repos(topic, max_results_each=2))
+
+    # ALICIA (Peru national OA repo) — always, not just replicate mode
+    seed_papers.extend(_search_alicia(selected["variant"], max_results=6))
+    if selected["variant"] != topic:
+        seed_papers.extend(_search_alicia(topic, max_results=4))
 
     # paperdl (arXiv, OpenReview, PMLR, PMC) — richer metadata than SS alone
     seed_papers.extend(_search_paperdl_seed_papers(selected["variant"], max_results=8, mode=paperdl_mode))
