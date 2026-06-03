@@ -385,7 +385,7 @@ def _display_and_choose_paper(papers: list[dict]) -> dict:
     display = papers[:10]
     best_idx = 0  # index in display of highest score (already sorted)
 
-    print("\n  ┌─ Replication candidates (ranked by method strength × data availability) ─┐")
+    print("\n  +-- Replication candidates (ranked by method strength x data availability) --+")
     for i, p in enumerate(display, 1):
         title = p.get("title", "Untitled")[:80]
         authors = (p.get("authors") or "Unknown")[:40]
@@ -399,23 +399,46 @@ def _display_and_choose_paper(papers: list[dict]) -> dict:
         has_oa = bool((p.get("openAccessPdf") or {}).get("url"))
         data_note = p.get("_data_note", "")
 
-        # Build data badge
-        if data_public or has_pkg:
-            data_badge = "DATA PÚBLICA ✓"
+        # DOI — prefer externalIds, fall back to URL
+        ext_ids = p.get("externalIds") or {}
+        doi = ext_ids.get("DOI") or ext_ids.get("doi") or ""
+        if not doi:
+            url = p.get("url", "")
+            if "doi.org/" in url:
+                doi = url.split("doi.org/")[-1].split(" ")[0]
+        doi_str = f"DOI: {doi}" if doi else p.get("url", "")[:60]
+
+        # paperdl availability badges
+        arxiv_id = ext_ids.get("ArXiv") or ext_ids.get("arxiv") or ""
+        has_arxiv = bool(arxiv_id)
+        oa_url = (p.get("openAccessPdf") or {}).get("url", "")
+        if has_arxiv:
+            pdf_badge = f"[paperdl: arXiv:{arxiv_id[:12]}]"
         elif has_oa:
-            data_badge = "OA PDF ✓"
+            pdf_badge = "[paperdl: OA PDF OK]"
+        elif has_pkg:
+            pdf_badge = "[replication pkg OK]"
+        else:
+            pdf_badge = "[PDF no encontrado]"
+
+        # Data badge
+        if data_public or has_pkg:
+            data_badge = "DATA PUBLICA OK"
+        elif has_oa:
+            data_badge = "OA PDF OK"
         else:
             data_badge = "data no verificada"
 
-        star = " ★ RECOMENDADO" if i == best_idx + 1 else ""
+        star = " ** RECOMENDADO **" if i == best_idx + 1 else ""
         print(f"\n  [{i}] {title}{star}")
         print(f"      {authors} ({year}) | citas: {cites}")
+        print(f"      {doi_str}")
         print(f"      Método: {method:<30} Score: {score:.1f}/10")
-        print(f"      Dataset: {dataset:<30} [{data_badge}]")
+        print(f"      Dataset: {dataset:<28} [{data_badge}]  {pdf_badge}")
         if data_note:
             print(f"      Nota: {data_note[:80]}")
 
-    print("  └──────────────────────────────────────────────────────────────────────────┘")
+    print("  +--------------------------------------------------------------------------+")
 
     if not sys.stdin.isatty():
         print(f"  [replication] Non-interactive: selecting candidate 1 (score {display[0].get('_replicate_score', 0):.1f}).")
