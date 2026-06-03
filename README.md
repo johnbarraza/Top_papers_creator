@@ -69,6 +69,23 @@ python run_pipeline.py --topic "Labor Markets" --data "./panel.csv"
 python run_pipeline.py --path-c
 ```
 
+### Replication mode (student assignment / HTE extension)
+
+Replicate an existing paper and add a heterogeneous treatment effects extension.
+
+```text
+# Search by topic — pipeline finds and ranks replication candidates
+python run_pipeline.py --topic "cash transfers Peru" --mode replicate
+
+# Bring your own paper (DOI) — skips candidate selection
+python run_pipeline.py --topic "cash transfers" --mode replicate --paper doi:10.1257/app.20170192
+
+# Bring your own PDF
+python run_pipeline.py --topic "education Peru" --mode replicate --paper ./mypaper.pdf
+```
+
+Stage 2 displays a ranked table of candidates with DOI, identification method, dataset name, data availability badge, and paperdl/arXiv access badge. You pick one (or it is skipped if `--paper` is provided), then the pipeline continues normally through Stages 3–7, generating HTE-specific code templates (`hte_00_clean.py` → `hte_03_output.py`).
+
 ### Resume or inspect an existing project
 
 ```text
@@ -112,6 +129,39 @@ Calls Dataverse, Zenodo, GitHub, and Semantic Scholar to find candidate datasets
 Generates 8–10 ideas scored by `0.4 × novelty + 0.3 × feasibility + 0.3 × impact`. For Path B, the prompt is constrained to use real variable names from your dataset.
 
 **Output:** `stage2_ideation.md` with the ranked top 3.
+
+#### Replication mode (`--mode replicate`)
+
+Switches Stage 2 to paper-search mode. Candidates are sourced from:
+
+- **[i4replication.org](https://www.i4replication.org/papers)** — 293+ replication-verified papers (activated only in replicate mode)
+- **Semantic Scholar** — general academic search
+- **paperdl** — arXiv, OpenReview, PMLR sources with direct PDF download
+
+Each candidate is enriched without an LLM call (keyword scan) and then a single Haiku batch call refines the top 15:
+
+| Signal | Weight | Detail |
+|---|---|---|
+| Method strength | 40% | RCT=10, IV/RDD=9, DiD=8, … OLS=3 |
+| Public data | 40% | Keyword match against 35+ known open datasets (ENAHO, ENDES, BCRP, MINEDU, datosabiertos.gob.pe, …) |
+| Citation log | 20% | `log(1 + citations)` normalized |
+
+The display shows DOI, method, dataset, public-data badge, and paperdl/arXiv access badge. You pick a candidate interactively, or pass `--paper doi:X` / `--paper ./file.pdf` to skip selection entirely.
+
+Replication ideas follow the schema `extension_type ∈ {REPLICATE, HTE-DML, HTE-CF, HTE-CT, EXTEND-T, EXTEND-Y, EXTEND-X}`. The prompt enforces that angles use the same public dataset as the original paper.
+
+#### HTE code templates
+
+When `detect_design()` returns `"hte"`, Stage 4 uses four fixed-template scripts instead of generating from scratch:
+
+| Script | Purpose |
+|---|---|
+| `hte_00_clean.py` | Load public data, apply sample restrictions, validate Y/D/X, covariate balance (SMD) |
+| `hte_01_main.py` | OLS replication gate (>30% deviation → warning in `results_summary.md`), DML ATE via DoubleML or manual cross-fitting fallback, CATE via CausalForestDML or pseudo-outcome RF fallback |
+| `hte_02_robustness.py` | Propensity overlap trim, alternative learners (Lasso/Ridge), placebo outcomes, leave-one-covariate-out sensitivity |
+| `hte_03_output.py` | Table 1 (replication vs original ATE), Table 2 (DML ATE + robustness), Table 3 (CATE by subgroup), Figure 1 (CATE distribution PDF) |
+
+Stage 3 validation adds a check (#6) that the identified dataset is publicly accessible; non-public data with no substitute is flagged as a feasibility blocker.
 
 ### Stage 2.5 — Idea Selection (human checkpoint)
 
