@@ -1442,17 +1442,126 @@ def _generate_data_summary(df) -> str:
     return "\n".join(lines)
 
 
+def _profile_directory(data_path: str) -> dict:
+    """Profile a folder of datasets instead of a single file.
+
+    Detects main data files, reads README if present, profiles the most
+    important file. Returns same dict shape as _profile_dataset plus
+    extra key 'folder_context' with human-readable folder description.
+    """
+    import pandas as pd
+
+    p = Path(data_path)
+    DATA_EXTS = {".dta", ".csv", ".xlsx", ".xls", ".parquet", ".tab", ".tsv", ".json"}
+
+    # ── 1. Collect all data files ──────────────────────────────────────────
+    all_files: list[Path] = []
+    for ext in DATA_EXTS:
+        all_files.extend(p.rglob(f"*{ext}"))
+    all_files.sort(key=lambda f: f.stat().st_size, reverse=True)
+
+    if not all_files:
+        print(f"  [data-dir] No data files found in {data_path}")
+        sys.exit(1)
+
+    print(f"  [data-dir] Found {len(all_files)} data file(s) in folder")
+
+    # ── 2. Heuristic: pick main file ───────────────────────────────────────
+    MAIN_KEYWORDS = ("final", "main", "analysis", "master", "base", "panel")
+    MAIN_FOLDERS  = ("finales", "final", "clean", "processed", "analysis")
+
+    def _score(f: Path) -> int:
+        score = 0
+        if any(k in f.stem.lower() for k in MAIN_KEYWORDS):
+            score += 10
+        if any(k in f.parts[-2].lower() for k in MAIN_FOLDERS):
+            score += 8
+        if f.suffix == ".dta":
+            score += 3
+        score += min(5, f.stat().st_size // (1024 * 1024))  # MB bonus, cap 5
+        return score
+
+    scored = sorted(all_files, key=_score, reverse=True)
+    main_file = scored[0]
+    print(f"  [data-dir] Primary file selected: {main_file.relative_to(p)}")
+
+    # ── 3. Read README ─────────────────────────────────────────────────────
+    readme_text = ""
+    for readme_name in ("README.txt", "readme.txt", "README.md", "readme.md"):
+        readme_path = p / readme_name
+        if readme_path.exists():
+            try:
+                readme_text = readme_path.read_text(encoding="utf-8", errors="replace")[:3000]
+                print(f"  [data-dir] README found: {readme_name}")
+                break
+            except Exception:
+                pass
+
+    # ── 4. Build folder manifest ───────────────────────────────────────────
+    manifest_lines = []
+    for f in all_files[:30]:
+        rel = f.relative_to(p)
+        size_kb = f.stat().st_size / 1024
+        marker = " ← [PRIMARY]" if f == main_file else ""
+        manifest_lines.append(f"  {rel}  ({size_kb:.0f} KB){marker}")
+    manifest = "\n".join(manifest_lines)
+    if len(all_files) > 30:
+        manifest += f"\n  ... and {len(all_files) - 30} more files"
+
+    folder_context = (
+        f"FOLDER INPUT — {len(all_files)} data file(s) detected.\n"
+        f"Folder: {p.name}\n\n"
+        f"Files:\n{manifest}\n"
+    )
+    if readme_text:
+        folder_context += f"\nREADME:\n{readme_text}\n"
+
+    # ── 5. Profile main file ───────────────────────────────────────────────
+    df = _load_dataframe(str(main_file))
+    rows, cols = df.shape
+    missing = df.isnull().mean().to_dict()
+    structure_info = _detect_id_and_time_columns(df)
+    data_summary = _generate_data_summary(df)
+
+    print(f"  [data-dir] Primary file: {rows} rows x {cols} cols "
+          f"({structure_info['structure']})")
+
+    profile = {
+        "rows": rows,
+        "cols": cols,
+        "columns": list(df.columns),
+        "dtypes": {c: str(df[c].dtype) for c in df.columns},
+        "missing_pct": {c: round(v * 100, 1) for c, v in missing.items()},
+        "structure": structure_info["structure"],
+        "panel_flag": structure_info["structure"] in ("panel", "wide-panel"),
+        "panel_details": structure_info["panel_details"],
+        "id_cols": structure_info["id_cols"],
+        "time_cols": structure_info["time_cols"],
+        "wide_panel": structure_info.get("wide_panel"),
+        "data_summary": data_summary,
+        "sample_rows": df.head(5).to_string(),
+        "folder_context": folder_context,
+        "all_files": [str(f.relative_to(p)) for f in all_files],
+        "primary_file": str(main_file.relative_to(p)),
+    }
+    return profile
+
+
 def _profile_dataset(data_path: str) -> dict:
     """Run deep profiling on the user's dataset.
 
     Returns keys: rows, cols, columns, dtypes, missing_pct, structure,
     panel_details, data_summary, sample_rows.
+    Accepts a single file OR a directory (auto-detects main file).
     """
     try:
         import pandas as pd
     except ImportError:
         print("  [error] pandas is required for Path B. Run: pip install pandas")
         sys.exit(1)
+
+    if Path(data_path).is_dir():
+        return _profile_directory(data_path)
 
     df = _load_dataframe(data_path)
     rows, cols = df.shape
@@ -4796,6 +4905,12 @@ def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = N
         _causal_design_warning(profile)
 
         # Build a Path B prompt with rich data context
+        folder_ctx = profile.get("folder_context", "")
+        primary_file_note = (
+            f"\nPrimary file profiled: {profile['primary_file']}\n"
+            f"Other files in folder (not loaded): {', '.join(profile.get('all_files', [])[1:10])}\n"
+            if profile.get("primary_file") else ""
+        )
         cols_summary = ", ".join(profile["columns"][:30])
         if len(profile["columns"]) > 30:
             cols_summary += f", ... ({len(profile['columns'])} total)"
@@ -4893,7 +5008,8 @@ def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = N
         prompt = f"""You are a research discovery assistant (Path B - user-provided data).
 
 The researcher works in: **{topic}**
-
+{folder_ctx if folder_ctx else ""}
+{primary_file_note}
 ## Dataset Structure Analysis
 
 {structure_desc}
