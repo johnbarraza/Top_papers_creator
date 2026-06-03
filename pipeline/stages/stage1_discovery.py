@@ -2719,11 +2719,35 @@ _DATOSABIERTOS_CURATED: list[dict] = [
         "encoding": "latin-1",
     },
     {
+        # LAB11 verified CKAN resource_id — more stable than direct file URL above
+        "name": "MINSA - IPRESS RENIPRESS (CKAN datastore, LAB11 verified)",
+        "keywords": ["salud", "health", "ipress", "establecimiento", "hospital",
+                     "minsa", "renipress", "clinica", "centro de salud", "medico"],
+        "download_url": (
+            "https://www.datosabiertos.gob.pe/api/3/action/datastore_search"
+            "?resource_id=7cf96151-5ddf-4281-90ba-b2b0407447ab&limit=500000"
+        ),
+        "encoding": "utf-8",
+        "ckan_resource_id": "7cf96151-5ddf-4281-90ba-b2b0407447ab",
+    },
+    {
         "name": "Alumnos matriculados 2016-2022 (MINEDU)",
         "keywords": ["educacion", "educación", "matricula", "matrícula", "alumno",
                      "estudiante", "escolar", "minedu", "colegio", "enrollment", "education", "school"],
         "download_url": "https://www.datosabiertos.gob.pe/sites/default/files/Matriculados_2016_al_2022.csv",
         "encoding": "utf-8",
+    },
+    {
+        # LAB11 verified CKAN resource_id for MINEDU matrícula
+        "name": "MINEDU - Matrícula escolar (CKAN datastore, LAB11 verified)",
+        "keywords": ["educacion", "educación", "matricula", "matrícula", "alumno",
+                     "estudiante", "escolar", "minedu", "colegio", "enrollment", "education", "school"],
+        "download_url": (
+            "https://www.datosabiertos.gob.pe/api/3/action/datastore_search"
+            "?resource_id=e276da3f-a009-4547-9e76-c814e14fc574&limit=500000"
+        ),
+        "encoding": "utf-8",
+        "ckan_resource_id": "e276da3f-a009-4547-9e76-c814e14fc574",
     },
 ]
 
@@ -2855,6 +2879,138 @@ def _search_peru_replication_packages(topic: str, max_results: int = 5) -> list[
                 break
     if results:
         print(f"  [peru-repl] Matched {len(results)} replication package(s) for '{topic}'")
+    return results
+
+
+# ── i4replication.org catalog ─────────────────────────────────────────────────
+#
+# SOURCE:  Institute for Replication (i4replication.org) — 293+ replicated papers
+# URL:     https://www.i4replication.org/papers
+# NOTES:   Static HTML page, no API. Scrape titles/authors, enrich via S2.
+#          All entries are published replications → has_public_data = True.
+#          Only activated when stage2_mode == "replicate".
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _search_i4replication(topic: str, max_results: int = 10) -> list[dict]:
+    """Scrape i4replication.org/papers for replication-verified papers matching topic.
+
+    Fetches the static HTML catalog, extracts titles/authors,
+    filters by topic relevance, then enriches via Semantic Scholar.
+    Returns up to max_results candidates with source="i4replication".
+    """
+    import re
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    catalog_url = "https://www.i4replication.org/papers"
+    print(f"  [i4replication] Fetching catalog: {catalog_url}")
+
+    try:
+        resp = requests.get(catalog_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        print(f"  [i4replication] Fetch failed: {e}")
+        return []
+
+    # ── Parse paper entries ────────────────────────────────────────────────
+    # i4replication.org uses <tr> rows or <div> cards — try both patterns
+    entries = []
+
+    # Pattern 1: table rows with paper title as link text
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL | re.IGNORECASE)
+    for row in rows:
+        # Strip tags
+        text = re.sub(r"<[^>]+>", " ", row)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > 20:
+            entries.append(text)
+
+    # Pattern 2: any <a> tag that looks like a paper title (>30 chars, no menu words)
+    if len(entries) < 10:
+        links = re.findall(r'<a[^>]*>([^<]{30,200})</a>', html)
+        skip = {"home", "papers", "about", "team", "contact", "donate", "blog",
+                "login", "signup", "register", "search", "filter", "sort"}
+        for link_text in links:
+            clean = re.sub(r"\s+", " ", link_text).strip()
+            if clean.lower() not in skip and len(clean) > 30:
+                entries.append(clean)
+
+    if not entries:
+        print("  [i4replication] Could not parse any entries from catalog page.")
+        return []
+
+    print(f"  [i4replication] Parsed {len(entries)} catalog entries")
+
+    # ── Filter by topic ────────────────────────────────────────────────────
+    topic_tokens = set(re.sub(r"[^a-z0-9 ]", "", topic.lower()).split())
+    topic_tokens.discard("")
+
+    scored = []
+    for entry in entries:
+        entry_lower = entry.lower()
+        hits = sum(1 for t in topic_tokens if t in entry_lower)
+        if hits > 0:
+            scored.append((hits, entry))
+
+    scored.sort(key=lambda x: -x[0])
+    top_entries = [e for _, e in scored[:max_results * 3]]
+
+    if not top_entries:
+        print(f"  [i4replication] No topic matches for '{topic}' in catalog.")
+        return []
+
+    print(f"  [i4replication] {len(top_entries)} topic-relevant entries — enriching via Semantic Scholar")
+
+    # ── Enrich via Semantic Scholar ────────────────────────────────────────
+    results = []
+    for entry in top_entries[:max_results * 2]:
+        # Use first 100 chars as query (titles extracted from HTML can be noisy)
+        query = entry[:100].strip()
+        try:
+            r = requests.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={
+                    "query": query,
+                    "limit": 1,
+                    "fields": "title,authors,year,venue,citationCount,abstract,url,openAccessPdf,externalIds",
+                },
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = r.json().get("data", [])
+            if not data:
+                continue
+            p = data[0]
+            title = (p.get("title") or "").strip()
+            if not title:
+                continue
+            authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
+            if len(p.get("authors") or []) > 3:
+                authors += " et al."
+            results.append({
+                "title": title,
+                "authors": authors,
+                "year": p.get("year"),
+                "venue": p.get("venue", ""),
+                "citationCount": p.get("citationCount", 0),
+                "abstract": p.get("abstract") or "",
+                "url": p.get("url") or "",
+                "openAccessPdf": p.get("openAccessPdf") or {},
+                "externalIds": p.get("externalIds") or {},
+                "source": "i4replication",
+                "has_public_data": True,
+                "_data_public": True,
+                "_data_source_kw": "i4replication verified",
+            })
+            if len(results) >= max_results:
+                break
+        except Exception:
+            continue
+
+    print(f"  [i4replication] {len(results)} enriched candidates")
     return results
 
 
@@ -4100,6 +4256,14 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
 
     seed_papers = []
     paperdl_mode = _resolve_paperdl_mode(state)
+    stage2_mode = state.get("config", {}).get("stage2_mode", "ask")
+
+    # i4replication.org catalog — only in replicate mode (293 verified papers)
+    if stage2_mode == "replicate":
+        seed_papers.extend(_search_i4replication(selected["variant"], max_results=10))
+        if selected["variant"] != topic:
+            seed_papers.extend(_search_i4replication(topic, max_results=5))
+
     # paperdl (arXiv, OpenReview, PMLR, PMC) — richer metadata than SS alone
     seed_papers.extend(_search_paperdl_seed_papers(selected["variant"], max_results=8, mode=paperdl_mode))
     seed_papers.extend(_search_semantic_scholar_seed_papers(selected["variant"], max_results=8))

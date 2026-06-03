@@ -579,17 +579,149 @@ def _fallback_replication_ideas(chosen_paper: dict, state: dict) -> list[dict]:
     ]
 
 
+def _resolve_paper_from_source(paper_source: str, project_dir: Path) -> dict:
+    """Build a paper dict from --paper flag value.
+
+    Accepts:
+      doi:10.1257/aer.20190829  → Semantic Scholar lookup by DOI
+      ./path/to/paper.pdf       → local file, build minimal dict
+    """
+    import requests
+
+    # ── DOI path ──────────────────────────────────────────────────────────
+    if paper_source.lower().startswith("doi:"):
+        doi = paper_source[4:].strip()
+        print(f"  [paper] Resolving DOI: {doi}")
+        try:
+            r = requests.get(
+                f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
+                params={"fields": "title,authors,year,venue,citationCount,abstract,url,openAccessPdf,externalIds"},
+                timeout=15,
+            )
+            r.raise_for_status()
+            p = r.json()
+            authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
+            if len(p.get("authors") or []) > 3:
+                authors += " et al."
+            paper = {
+                "title": (p.get("title") or doi).strip(),
+                "authors": authors,
+                "year": p.get("year"),
+                "venue": p.get("venue", ""),
+                "citationCount": p.get("citationCount", 0),
+                "abstract": p.get("abstract") or "",
+                "url": p.get("url") or f"https://doi.org/{doi}",
+                "openAccessPdf": p.get("openAccessPdf") or {},
+                "externalIds": p.get("externalIds") or {},
+                "source": "doi_specified",
+                "_data_public": False,
+                "_method": "unknown",
+                "_dataset_name": "",
+            }
+            print(f"  [paper] Found: {paper['title'][:70]}")
+            return paper
+        except Exception as e:
+            print(f"  [paper] DOI lookup failed ({e}), using stub.")
+            return {
+                "title": f"Paper {doi}",
+                "authors": "",
+                "year": None,
+                "venue": "",
+                "citationCount": 0,
+                "abstract": "",
+                "url": f"https://doi.org/{doi}",
+                "openAccessPdf": {},
+                "source": "doi_specified",
+                "_data_public": False,
+                "_method": "unknown",
+                "_dataset_name": "",
+            }
+
+    # ── Local PDF path ────────────────────────────────────────────────────
+    from pathlib import Path as _P
+    pdf_path = _P(paper_source)
+    if not pdf_path.is_absolute():
+        pdf_path = _P.cwd() / pdf_path
+
+    if pdf_path.exists():
+        print(f"  [paper] Using local file: {pdf_path.name}")
+        return {
+            "title": pdf_path.stem.replace("_", " ").replace("-", " "),
+            "authors": "",
+            "year": None,
+            "venue": "",
+            "citationCount": 0,
+            "abstract": "",
+            "url": "",
+            "openAccessPdf": {"url": str(pdf_path)},
+            "local_path": str(pdf_path),
+            "source": "local_pdf",
+            "_data_public": False,
+            "_method": "unknown",
+            "_dataset_name": "",
+        }
+
+    print(f"  [paper] Path not found: {paper_source} — using fallback stub.")
+    return {
+        "title": paper_source,
+        "authors": "",
+        "year": None,
+        "venue": "",
+        "citationCount": 0,
+        "abstract": "",
+        "url": "",
+        "openAccessPdf": {},
+        "source": "specified",
+        "_data_public": False,
+        "_method": "unknown",
+        "_dataset_name": "",
+    }
+
+
 def _run_replication_mode(project_dir: Path, state: dict) -> dict:
     """Generate replication/HTE extension ideas while preserving Stage 2 schema."""
     stage1 = state["stages"].get("stage1", {})
     topic = stage1.get("topic", "academic research")
     mode = _resolve_mode(state)
-    candidates = _collect_replication_candidates(project_dir, state)
-    print(f"  [enrich] Analyzing {len(candidates)} candidates for method + data availability…")
-    candidates = _enrich_with_method_and_data(candidates)
-    chosen_paper = _display_and_choose_paper(candidates)
+
+    paper_source = state.get("config", {}).get("paper_source")
+    if paper_source:
+        chosen_paper = _resolve_paper_from_source(paper_source, project_dir)
+    else:
+        candidates = _collect_replication_candidates(project_dir, state)
+        print(f"  [enrich] Analyzing {len(candidates)} candidates for method + data availability…")
+        candidates = _enrich_with_method_and_data(candidates)
+        chosen_paper = _display_and_choose_paper(candidates)
+
     paper_content = _fetch_paper_content(chosen_paper, project_dir, mode=mode)
     data_context = _replication_data_context(state)
+
+    # Build data availability context from enrichment results
+    _data_public = chosen_paper.get("_data_public", False)
+    _dataset_name = (
+        chosen_paper.get("_dataset_name")
+        or chosen_paper.get("_data_source_kw")
+        or ""
+    )
+    data_availability_note = ""
+    if _data_public and _dataset_name:
+        data_availability_note = (
+            f"\nDATA AVAILABILITY: The original paper uses publicly accessible data "
+            f"({_dataset_name}). All HTE angles MUST use this same public dataset "
+            f"or a comparable publicly available substitute. Do NOT propose angles "
+            f"that require confidential or proprietary data."
+        )
+    elif _data_public:
+        data_availability_note = (
+            f"\nDATA AVAILABILITY: Public data verified for this paper. "
+            f"Prioritize angles using the same public dataset."
+        )
+    else:
+        data_availability_note = (
+            f"\nDATA AVAILABILITY: Public data access NOT verified. "
+            f"Prefer angles that can be executed with ENAHO, ENDES, or other "
+            f"Peruvian open microdata as a substitute."
+        )
 
     prompt = f"""You are a rigorous empirical research advisor.
 
@@ -607,6 +739,7 @@ Venue: {chosen_paper.get('venue', 'N/A')}
 URL: {chosen_paper.get('url', 'N/A')}
 Abstract/metadata:
 {paper_content.get('text_excerpt', '')[:6000]}
+{data_availability_note}
 
 AVAILABLE DATA:
 {data_context}
@@ -614,6 +747,7 @@ AVAILABLE DATA:
 Generate 5-8 replication or extension angles. Each angle must be a complete
 Stage 2 idea compatible with the existing pipeline. Prefer angles that first
 replicate the original ATE, then extend to HTE only if the data can support it.
+All proposed data_sources must be publicly accessible.
 
 Allowed extension types:
 - REPLICATE

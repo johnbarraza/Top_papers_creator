@@ -97,6 +97,8 @@ def main():
                         help="Stop after a specific stage (default: 7)")
     parser.add_argument("--mode", choices=["new", "replicate", "ask"], default="ask",
                         help="Stage 2 mode: new ideas, replication/HTE, or ask interactively")
+    parser.add_argument("--paper", type=str, default=None,
+                        help="Paper source for --mode replicate: 'doi:10.1257/...' or path to local PDF")
     parser.add_argument("--paperdl", choices=["auto", "on", "off"], default="auto",
                         help="paperdl integration: auto (if installed), on (require), off (skip)")
     parser.add_argument("--notebooklm", choices=["auto", "on", "off"], default="auto",
@@ -216,6 +218,8 @@ def main():
     state.setdefault("config", {})["stage2_mode"] = args.mode
     state.setdefault("config", {})["paperdl"] = args.paperdl
     state.setdefault("config", {})["notebooklm"] = args.notebooklm
+    if args.paper:
+        state["config"]["paper_source"] = args.paper
 
     print(f"Project: {project_name}")
     print(f"Directory: {project_dir}")

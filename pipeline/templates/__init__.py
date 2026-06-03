@@ -16,6 +16,22 @@ from pathlib import Path
 TEMPLATE_DIR = Path(__file__).parent
 
 AVAILABLE_DESIGNS = {
+    "hte": {
+        "name": "Heterogeneous Treatment Effects (DML + Causal Forest)",
+        "scripts": [
+            "hte_00_clean.py",
+            "hte_01_main.py",
+            "hte_02_robustness.py",
+            "hte_03_output.py",
+        ],
+        "variables": [
+            "DATA_FILE", "DATA_FORMAT", "OUTCOME_VAR", "TREATMENT_VAR",
+            "COVARIATES", "HTE_VARS", "ENTITY_VAR", "CLUSTER_VAR",
+            "SAMPLE_FILTERS", "ORIGINAL_ATE", "ORIGINAL_ATE_SE",
+            "PLACEBO_OUTCOMES", "BASE_PAPER_TITLE", "PRIMARY_OUTCOME",
+            "OUTCOME_LABEL", "TREATMENT_LABEL", "JOURNAL_FORMAT",
+        ],
+    },
     "rdd": {
         "name": "Regression Discontinuity Design",
         "scripts": [
