@@ -47,6 +47,7 @@ The pipeline is built on top of the [Claude Code](https://claude.ai/code) CLI an
   |---|---|
   | Claude.ai Pro or Max subscription | `claude login` in your terminal |
   | Anthropic API key | `export ANTHROPIC_API_KEY=sk-...` (or set in `.env`) |
+  | DeepSeek API (cheaper alternative) | See [DeepSeek backend](#deepseek-backend-optional) below |
 
   > A Pro subscription is sufficient for most runs. Max gives higher rate limits for long parallel stages (4, 5, 6). Any terminal works (VS Code, Windows Terminal, Google Antigravity, etc.) — no special IDE required.
 
@@ -133,6 +134,55 @@ Open the project folder in any terminal (VS Code, Windows Terminal, etc.), make 
 ```bash
 python run_pipeline.py --topic "Your research topic"
 ```
+
+---
+
+### DeepSeek backend (optional) `[experimental — not fully tested]`
+
+> **Warning:** DeepSeek integration has not been tested end-to-end with this pipeline. Multi-turn reasoning, tool use, and parallel agent stages (4, 5, 6) may behave differently from Claude. Use at your own risk and expect edge cases.
+
+Claude Code CLI supports alternative OpenAI-compatible backends via environment variables. To route all pipeline LLM calls through [DeepSeek](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code) instead of Anthropic:
+
+**Windows (PowerShell):**
+
+```powershell
+$env:ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+$env:ANTHROPIC_AUTH_TOKEN="<your DeepSeek API Key>"
+$env:ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_EFFORT_LEVEL="max"
+```
+
+**macOS / Linux (bash):**
+
+```bash
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_AUTH_TOKEN="<your DeepSeek API Key>"
+export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_EFFORT_LEVEL="max"
+```
+
+Then run the pipeline normally — the env vars are picked up automatically by the `claude` subprocess:
+
+```bash
+python run_pipeline.py --topic "Your research topic"
+```
+
+If Claude Code prompts for permissions on every tool call (common with third-party backends), add `--dangerously-skip-permissions` directly to the `claude -p` invocation inside `pipeline/claude_runner.py`:
+
+```python
+# pipeline/claude_runner.py  — _build_cmd()
+cmd = ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text"]
+```
+
+> **Security note:** `--dangerously-skip-permissions` disables Claude Code's built-in permission prompts for file and shell access. Only add it if you understand what the pipeline executes. Never use it on a machine with unreviewed code or sensitive credentials in scope.
 
 The pipeline also uses these free public APIs (no key needed):
 
