@@ -327,6 +327,237 @@ def _search_up_repository(
     return results
 
 
+def _faculty_up_fetch_html(url: str) -> str:
+    """Launch UC browser, wait for Cloudflare to clear, return page HTML."""
+    import undetected_chromedriver as uc
+    import time
+
+    options = uc.ChromeOptions()
+    driver = uc.Chrome(options=options, version_main=148)
+    try:
+        driver.get(url)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            t = driver.title.lower()
+            if "momento" not in t and "moment" not in t:
+                break
+            time.sleep(1)
+        time.sleep(4)  # concept badges are JS-rendered, need extra settle
+        return driver.page_source
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
+def _faculty_up_abstract_from_doi(doi: str) -> str:
+    """Fetch abstract from Semantic Scholar using DOI. Returns '' on failure."""
+    try:
+        import requests
+        r = requests.get(
+            f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
+            params={"fields": "abstract"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json().get("abstract") or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _faculty_up_abstract_from_page(pub_url: str) -> str:
+    """Fetch abstract from individual FacultyUP publication page. Returns '' on failure."""
+    try:
+        from bs4 import BeautifulSoup
+        html = _faculty_up_fetch_html(pub_url)
+        soup = BeautifulSoup(html, "html.parser")
+        # Abstract is in div with class containing 'abstractportal'
+        for div in soup.find_all("div", class_=lambda c: c and "abstractportal" in " ".join(c)):
+            tb = div.find("div", class_="textblock")
+            if tb:
+                return tb.get_text(" ", strip=True)
+        # Fallback: BibTeX abstract field
+        for div in soup.find_all("div", class_=lambda c: c and "bibtex" in " ".join(c)):
+            import re
+            m = re.search(r'abstract\s*=\s*"([^"]+)"', div.get_text(" ", strip=True))
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_faculty_up_page(soup, seen: set, max_needed: int) -> list[dict]:
+    """Parse one FacultyUP search results page. Returns new results only."""
+    import re
+    results = []
+    for li in soup.find_all("li", class_="list-result-item"):
+        if len(results) >= max_needed:
+            break
+        a_title = li.find(
+            "a",
+            href=lambda h: h and "/publications/" in h and "?" not in h and len(h) > 20,
+        )
+        if not a_title:
+            continue
+        title = a_title.get_text(strip=True)
+        if len(title) < 10 or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+
+        pub_url = (
+            a_title["href"] if a_title["href"].startswith("http")
+            else "https://faculty.up.edu.pe" + a_title["href"]
+        )
+        div_r = a_title.find_parent("div", class_="rendering")
+        div_text = div_r.get_text(" ", strip=True) if div_r else li.get_text(" ", strip=True)
+
+        authors_str = ""
+        text_after_title = div_text[len(title):].strip()
+        m_yr = re.search(r"\b((?:19|20)\d{2})\b", text_after_title)
+        if m_yr:
+            authors_raw = text_after_title[: m_yr.start()].strip().rstrip(",;& ")
+            authors_list = [
+                a.strip().rstrip(".,;")
+                for a in re.split(r"\s*[,&]\s*", authors_raw)
+                if a.strip() and len(a.strip()) > 1
+            ]
+            authors_str = ", ".join(a for a in authors_list if a)
+
+        year = None
+        m = re.search(r"\b((?:19|20)\d{2})\b", div_text)
+        if m:
+            year = int(m.group(1))
+
+        venue = "FacultyUP - Universidad del Pacífico"
+        m = re.search(r"\bIn:\s*([^.\n]+)", div_text)
+        if m:
+            venue = m.group(1).strip().split(".")[0].strip()
+
+        is_oa = bool(li.find("div", class_="open-access"))
+
+        keywords: list[str] = []
+        for badge in li.find_all("button", class_="concept-badge-small"):
+            kw_text = re.sub(r"\s*\d+%\s*$", "", badge.get_text(strip=True)).strip()
+            if kw_text and kw_text not in keywords:
+                keywords.append(kw_text)
+
+        doi = ""
+        for a_link in li.find_all("a", href=re.compile(r"plu\.mx")):
+            m_doi = re.search(r"doi=([^&]+)", a_link["href"])
+            if m_doi:
+                doi = m_doi.group(1)
+                break
+
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": year,
+            "venue": venue,
+            "citationCount": 0,
+            "abstract": "",
+            "keywords": keywords,
+            "openAccess": is_oa,
+            "url": pub_url,
+            "openAccessPdf": {},
+            "externalIds": {"DOI": doi} if doi else {},
+            "source": "faculty_up",
+            "doi": doi,
+        })
+    return results
+
+
+def _search_faculty_up(
+    topic: str,
+    max_results: int = 8,
+    fetch_abstracts: bool = True,
+) -> list[dict]:
+    """Search faculty.up.edu.pe (PURE portal) via undetected-chromedriver.
+
+    Cloudflare blocks plain requests and headless Playwright. UC non-headless
+    passes the JS challenge. Supports pagination (50 results/page).
+    Gracefully returns [] if undetected_chromedriver or beautifulsoup4 missing.
+
+    Extracts: title, authors, year, venue, DOI, open-access status, keywords.
+    Enriches abstract via S2 API (DOI present) or individual page fetch (no DOI).
+    """
+    try:
+        import undetected_chromedriver as uc
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    import re
+    import time
+    from urllib.parse import quote as _url_quote
+
+    print(f"  [faculty-up] Searching '{topic[:60]}'...")
+    base_url = (
+        f"https://faculty.up.edu.pe/en/publications/"
+        f"?search={_url_quote(topic)}&searchBy=PartOfNameOrTitle"
+    )
+
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    options = uc.ChromeOptions()
+    driver = uc.Chrome(options=options, version_main=148)
+    try:
+        page_num = 0
+        while len(results) < max_results:
+            url = base_url if page_num == 0 else f"{base_url}&page={page_num}"
+            driver.get(url)
+
+            if page_num == 0:
+                # Wait for Cloudflare challenge on first page only
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    if "momento" not in driver.title.lower() and "moment" not in driver.title.lower():
+                        break
+                    time.sleep(1)
+                time.sleep(4)  # concept badges are JS-rendered
+            else:
+                time.sleep(3)  # CF already cleared; just wait for JS render
+
+            html = driver.page_source
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Total results count — only parse once
+            if page_num == 0:
+                m_total = re.search(r"(\d+)\s+results?", soup.get_text(" ", strip=True))
+                total = int(m_total.group(1)) if m_total else 0
+                print(f"  [faculty-up] {total} total results, fetching up to {max_results}")
+
+            page_results = _parse_faculty_up_page(soup, seen, max_results - len(results))
+            results.extend(page_results)
+
+            # Stop if no new results (last page) or next page link absent
+            if not page_results or not soup.find("a", class_="step", string=str(page_num + 2)):
+                break
+            page_num += 1
+
+    except Exception as exc:
+        print(f"  [faculty-up] Browser error: {exc}")
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    # Enrich abstracts: S2 API if DOI available, individual page fetch otherwise
+    if fetch_abstracts:
+        for r in results:
+            if r["doi"]:
+                r["abstract"] = _faculty_up_abstract_from_doi(r["doi"])
+            else:
+                r["abstract"] = _faculty_up_abstract_from_page(r["url"])
+
+    print(f"  [faculty-up] Found {len(results)} papers")
+    return results
+
+
 def _search_openalex_seed_papers(
     topic: str,
     max_results: int = 10,
@@ -3788,9 +4019,10 @@ def _search_dspace_portal(base_url: str, portal_label: str,
 
 
 def _search_peru_dspace_repos(topic: str, max_results_each: int = 4) -> list[dict]:
-    """Search all configured Peru DSpace portals (PUCP, UP, CONCYTEC).
+    """Search all configured Peru DSpace portals (PUCP, UP, CONCYTEC) + FacultyUP.
 
-    UP uses Playwright (bot-protection blocks REST/OAI-PMH).
+    UP repositorio uses Playwright (bot-protection blocks REST/OAI-PMH).
+    FacultyUP (PURE portal) uses undetected-chromedriver (Cloudflare bypass).
     PUCP and CONCYTEC use DSpace 7 REST API.
     """
     all_results: list[dict] = []
@@ -3807,6 +4039,11 @@ def _search_peru_dspace_repos(topic: str, max_results_each: int = 4) -> list[dic
                 )
         except Exception:
             continue
+    # FacultyUP — PURE portal for UP faculty journal publications (Cloudflare-protected)
+    try:
+        all_results.extend(_search_faculty_up(topic, max_results=max_results_each))
+    except Exception:
+        pass
     return all_results
 
 
