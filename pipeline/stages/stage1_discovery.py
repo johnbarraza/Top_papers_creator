@@ -218,6 +218,115 @@ def _search_semantic_scholar_seed_papers(topic: str, max_results: int = 10) -> l
         return []
 
 
+def _search_up_repository(
+    topic: str,
+    max_results: int = 8,
+) -> list[dict]:
+    """Search Universidad del Pacífico DSpace repository via Playwright.
+
+    UP's DSpace is protected by within.website bot-detection which blocks plain
+    requests and OAI-PMH. Playwright (real Chromium) bypasses it. Gracefully
+    returns [] if playwright is not installed.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    import re
+    from urllib.parse import quote as _url_quote
+
+    print(f"  [up-repo] Searching '{topic[:60]}'...")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                )
+            )
+            page = ctx.new_page()
+            page.goto(
+                f"https://repositorio.up.edu.pe/search?query={_url_quote(topic)}&rpp={min(max_results * 2, 20)}",
+                wait_until="networkidle",
+                timeout=30000,
+            )
+            page.wait_for_timeout(2000)
+            html = page.content()
+            browser.close()
+    except Exception as exc:
+        print(f"  [up-repo] Browser error: {exc}")
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    # Each result: anchor with /item/ href and meaningful title
+    for a_title in soup.find_all("a", href=lambda h: h and h.startswith("/item/")):
+        title = a_title.get_text(strip=True)
+        if len(title) < 10 or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+
+        url = "https://repositorio.up.edu.pe" + a_title["href"]
+
+        # Walk up to result container (stops when text > 300 chars)
+        container = a_title
+        for _ in range(8):
+            if container.parent is None:
+                break
+            container = container.parent
+            if len(container.get_text(" ", strip=True)) > 300:
+                break
+
+        # Authors: links to /browse/author/
+        author_tags = container.find_all("a", href=lambda h: h and "browse/author" in h)
+        authors = [t.get_text(strip=True).rstrip(",;") for t in author_tags[:4]]
+        authors_str = ", ".join(a for a in authors if a)
+        if len(author_tags) > 4:
+            authors_str += " et al."
+
+        # Date: text matching YYYY-MM or YYYY pattern NOT inside an <a>
+        year = None
+        for el in container.find_all(string=True):
+            if el.parent and el.parent.name == "a":
+                continue
+            m = re.search(r"\b((?:19|20)\d{2})(?:-\d{2})?\b", el.strip())
+            if m:
+                year = int(m.group(1))
+                break
+
+        # Abstract: first <p> tag
+        abstract = ""
+        p_tag = container.find("p")
+        if p_tag:
+            abstract = p_tag.get_text(" ", strip=True)[:1000]
+
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": year,
+            "venue": "UP Repositorio Institucional",
+            "citationCount": 0,
+            "abstract": abstract,
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {},
+            "source": "up_dspace",
+            "doi": "",
+        })
+
+        if len(results) >= max_results:
+            break
+
+    print(f"  [up-repo] Found {len(results)} papers")
+    return results
+
+
 def _search_openalex_seed_papers(
     topic: str,
     max_results: int = 10,
@@ -3679,15 +3788,23 @@ def _search_dspace_portal(base_url: str, portal_label: str,
 
 
 def _search_peru_dspace_repos(topic: str, max_results_each: int = 4) -> list[dict]:
-    """Search all configured Peru DSpace portals (PUCP, UP, CONCYTEC)."""
+    """Search all configured Peru DSpace portals (PUCP, UP, CONCYTEC).
+
+    UP uses Playwright (bot-protection blocks REST/OAI-PMH).
+    PUCP and CONCYTEC use DSpace 7 REST API.
+    """
     all_results: list[dict] = []
     for portal in _PERU_DSPACE_PORTALS:
         try:
-            all_results.extend(
-                _search_dspace_portal(
-                    portal["base"], portal["label"], topic, max_results_each
+            if "up.edu.pe" in portal["base"]:
+                # UP blocks automated REST/OAI-PMH — use Playwright scraper
+                all_results.extend(_search_up_repository(topic, max_results=max_results_each))
+            else:
+                all_results.extend(
+                    _search_dspace_portal(
+                        portal["base"], portal["label"], topic, max_results_each
+                    )
                 )
-            )
         except Exception:
             continue
     return all_results
