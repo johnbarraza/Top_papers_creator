@@ -35,23 +35,116 @@ The pipeline is built on top of the [Claude Code](https://claude.ai/code) CLI an
 
 ## Installation
 
-**Requirements:**
+### Prerequisites
 
-- **[Claude Max subscription](https://www.anthropic.com/pricing)** — the pipeline routes every LLM call through your authenticated Claude session. A pay-per-token Anthropic API key is **not** sufficient: Stages 2, 3, 4, 5, and 6 launch multi-turn conversations and parallel agents whose volume only fits within the Max plan's quotas.
-- **[Google Antigravity](https://antigravity.google/)** — the pipeline is designed to run inside Antigravity's agentic IDE, which hosts the Claude Code session, the long-running terminal context required for Stages 4 and 5 (manual intervention), and the file system access used by the Python orchestrator.
-- Python 3.11+ (tested on 3.14 on Windows)
-- LaTeX distribution with `pdflatex` on `PATH` (TeX Live or MiKTeX)
-- Standard Python packages: `pandas`, `numpy`, `requests` (imported ad-hoc — install on first run)
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — every LLM call runs through `claude -p` (headless mode) via subprocess. Install it once and authenticate with any of the options below.
 
-**Setup:**
+  **Authentication — pick one:**
+  | Option | How |
+  |---|---|
+  | Claude.ai Pro or Max subscription | `claude login` in your terminal |
+  | Anthropic API key | `export ANTHROPIC_API_KEY=sk-...` (or set in `.env`) |
+
+  > A Pro subscription is sufficient for most runs. Max gives higher rate limits for long parallel stages (4, 5, 6). Any terminal works (VS Code, Windows Terminal, Google Antigravity, etc.) — no special IDE required.
+
+- **Python 3.11+** (tested on 3.14 on Windows)
+- **LaTeX** with `pdflatex` on `PATH` — [TeX Live](https://tug.org/texlive/) (Linux/Mac) or [MiKTeX](https://miktex.org/) (Windows)
+
+---
+
+### Step 1 — Clone
 
 ```bash
 git clone https://github.com/jnichor/Top_papers_creator.git
 cd Top_papers_creator
-pip install pandas numpy requests
 ```
 
-Open the cloned folder inside Google Antigravity, sign in with the Google account linked to your Claude Max subscription, and run the pipeline from Antigravity's integrated terminal. All LLM calls flow through the authenticated session — no Anthropic API key is required. The pipeline also uses free public APIs (Dataverse, Zenodo, GitHub, Semantic Scholar) for dataset discovery and literature review.
+### Step 2 — Create a virtual environment (recommended)
+
+**Using `venv` (built-in):**
+
+```bash
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
+
+# macOS / Linux
+python -m venv .venv
+source .venv/bin/activate
+```
+
+**Using `conda`:**
+
+```bash
+conda create -n papers-hq python=3.12
+conda activate papers-hq
+```
+
+> All subsequent `pip install` commands should run inside the activated environment.
+
+### Step 3 — Install dependencies
+
+**Core + econometrics (required for all modes):**
+
+```bash
+pip install pandas numpy requests scipy matplotlib scikit-learn statsmodels
+pip install linearmodels pyfixest econml doubleml
+pip install wildboottest rdrobust rddensity bacondecomp csdid
+```
+
+**Peruvian microdata — ENAHO, ENDES, and other INEI surveys:**
+
+```bash
+pip install inei-microdatos
+```
+
+**PDF handling (Stage 5 writing + Stage 7 audit):**
+
+```bash
+pip install pymupdf fpdf2 Pillow
+```
+
+Or install everything at once from the lockfile:
+
+```bash
+pip install -r requirements.txt
+```
+
+**Optional packages** (uncomment in `requirements.txt` to enable):
+
+| Package | Enables |
+|---|---|
+| `paperdl` | Richer seed-paper search: arXiv, OpenReview, PMLR, PMC |
+| `owslib` | INGEMMET GEOCATMIN spatial layers (WFS) |
+| `rarfile` | Extract `.rar` replication packages |
+
+```bash
+# Install all optional packages
+pip install paperdl owslib rarfile
+```
+
+### Step 4 — Run
+
+Open the project folder in any terminal (VS Code, Windows Terminal, etc.), make sure Claude Code CLI is authenticated, and run:
+
+```bash
+python run_pipeline.py --topic "Your research topic"
+```
+
+The pipeline also uses these free public APIs (no key needed):
+
+| Source | Used for |
+|---|---|
+| Harvard Dataverse, Zenodo | Dataset discovery and download |
+| datosabiertos.gob.pe | Peruvian government open data |
+| INEI microdata portal | ENAHO, ENDES survey download |
+| BCRP REST API | Peruvian macro time series |
+| World Bank, IDB, FAOSTAT | Cross-country panel data |
+| Socrata (~30 US city/state portals) | Municipal open data |
+| Semantic Scholar | Literature review |
+| PUCP, CONCYTEC repositories | Peruvian academic papers (seed papers) |
+| ALICIA (CONCYTEC) | Peruvian open-access papers |
+| GitHub | Replication packages |
 
 
 ## Usage
@@ -69,7 +162,9 @@ python run_pipeline.py --topic "Labor Markets" --data "./panel.csv"
 python run_pipeline.py --path-c
 ```
 
-### Replication mode (student assignment / HTE extension)
+### Replication mode (student assignment / HTE extension) `[beta]`
+
+> **Beta:** replication mode is functional but still under active development. Paper candidate ranking, HTE template generation, and public-data verification work end-to-end — edge cases and some journal-specific replication packages may require manual adjustment.
 
 Replicate an existing paper and add a heterogeneous treatment effects extension.
 

@@ -334,7 +334,7 @@ def request_manual_intervention(
     print(f"  MANUAL INTERVENTION NEEDED")
     print(f"  {'=' * 60}")
     print(f"  Stage: {stage}")
-    print(f"  Issue: {issue}")
+    print(f"  Issue: {issue}".encode("ascii", errors="replace").decode("ascii"))
     print(f"  Files: {', '.join(files)}")
     print(f"  {'=' * 60}")
     print(f"  Tell Claude in conversation: 'revisa el pipeline'")

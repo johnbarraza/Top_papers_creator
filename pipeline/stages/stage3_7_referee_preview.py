@@ -256,7 +256,8 @@ Output a JSON block:
     # Print summary
     print(f"  [3.7] Requirements: {len(must)} MUST, {len(should)} SHOULD, {len(nice)} NICE")
     for r in must:
-        print(f"    [MUST] {r.get('category', '?')}: {r.get('requirement', '?')[:100]}")
+        line = f"    [MUST] {r.get('category', '?')}: {r.get('requirement', '?')[:100]}"
+        print(line.encode('ascii', errors='replace').decode('ascii'))
 
     # Save merged checklist as markdown for Stage 4 to read
     checklist_lines = [

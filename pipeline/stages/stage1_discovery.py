@@ -4739,10 +4739,11 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
         if selected["variant"] != topic:
             seed_papers.extend(_search_openicpsr(topic, max_results=4))
 
-        # Peru DSpace repositories (PUCP, UP, CONCYTEC) — replicate only
-        seed_papers.extend(_search_peru_dspace_repos(selected["variant"], max_results_each=4))
-        if selected["variant"] != topic:
-            seed_papers.extend(_search_peru_dspace_repos(topic, max_results_each=2))
+
+    # Peru DSpace repositories (PUCP, UP, CONCYTEC) — always (seed papers for any mode)
+    seed_papers.extend(_search_peru_dspace_repos(selected["variant"], max_results_each=4))
+    if selected["variant"] != topic:
+        seed_papers.extend(_search_peru_dspace_repos(topic, max_results_each=2))
 
     # ALICIA (Peru national OA repo) — always, not just replicate mode
     seed_papers.extend(_search_alicia(selected["variant"], max_results=6))
