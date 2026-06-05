@@ -2,9 +2,12 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Fork of jnichor](https://img.shields.io/badge/fork%20of-jnichor%2FTop__papers__creator-orange)](https://github.com/jnichor/Top_papers_creator)
 [![Stars](https://img.shields.io/github/stars/jnichor/Top_papers_creator?style=social)](https://github.com/jnichor/Top_papers_creator/stargazers)
 [![Powered by Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-D97757)](https://claude.ai/code)
 [![Runs on Antigravity](https://img.shields.io/badge/Runs%20on-Google%20Antigravity-4285F4)](https://antigravity.google/)
+
+> **This is a fork of [jnichor/Top_papers_creator](https://github.com/jnichor/Top_papers_creator).** Additions in this fork: full `requirements.txt`, expanded public-data sources (PUCP, CONCYTEC, UP DSpace), corrected installation guide, and replication-mode beta label.
 
 A hybrid AI–human research pipeline that takes you from a research idea to a submission-ready paper. Claude handles reasoning (ideation, validation, writing, review); Python handles execution (data loading, code generation, statistics, LaTeX compilation). State is persisted between stages so you can stop, resume, or rerun any stage at will.
 
@@ -413,6 +416,17 @@ Each stage records its result under `stages.stage<N>` with at minimum a `status`
 - **Identification scoring** — `pipeline/stage4_strategy.py::_score_identification()`.
 - **Reviewer prompts** — edit the matching skill file in [`Skills/`](Skills/).
 - **Per-project context** — drop a `CLAUDE.md` inside `projects/<name>/` to give the agents project-specific instructions.
+
+
+## Acknowledgements & Credits
+
+| Project | Author | Role in this pipeline |
+|---|---|---|
+| [Top_papers_creator](https://github.com/jnichor/Top_papers_creator) | [@jnichor](https://github.com/jnichor) | Original pipeline — this repo is a fork |
+| [inei-microdatos](https://github.com/fiorellarmartins/inei-microdatos) | [@fiorellarmartins](https://github.com/fiorellarmartins) | Programmatic download of INEI Peru surveys (ENAHO, ENDES, etc.) |
+| [AI-research-feedback](https://github.com/claesbackman/AI-research-feedback) | [Claes Bäckman](https://claesbackman.com) | `review-paper` and `review-paper-code` skills (Stages 6 and 4.7) |
+
+All third-party components are used under their respective open-source licenses (MIT unless otherwise noted).
 
 
 ## License
