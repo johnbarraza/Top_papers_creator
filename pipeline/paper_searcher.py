@@ -124,14 +124,16 @@ SOURCE_LABELS: dict[str, str] = {
     "pmlr": "PMLR",
     "pmc": "PubMed Central",
     "semantic_scholar": "Semantic Scholar",
+    "openalex": "OpenAlex",
 }
 
 # Sources likely to have economics/social-science papers
 ECON_RELEVANT_SOURCES = [
-    "arxiv",       # econ.GN, econ.EM, stat.AP, stat.ME
-    "openreview",  # conference papers (sometimes econ-adjacent)
-    "pmlr",        # ML proceedings (causal ML, policy learning)
-    "pmc",         # health economics, public health
+    "arxiv",           # econ.GN, econ.EM, stat.AP, stat.ME
+    "openreview",      # conference papers (sometimes econ-adjacent)
+    "pmlr",            # ML proceedings (causal ML, policy learning)
+    "pmc",             # health economics, public health
+    "openalex",        # 250M+ works, strong econ/social-science coverage
 ]
 
 
@@ -175,7 +177,8 @@ class PaperSearcher:
         self._paperdl_kwargs = paperdl_kwargs or {}
         self._paperdl_client: Any = None  # lazy
         self._use_semantic_scholar = "semantic_scholar" in sources
-        self._paperdl_sources = [s for s in sources if s != "semantic_scholar"]
+        self._use_openalex = "openalex" in sources
+        self._paperdl_sources = [s for s in sources if s not in ("semantic_scholar", "openalex")]
 
         # Enforce mode
         if mode == "off":
@@ -245,7 +248,15 @@ class PaperSearcher:
             except Exception as exc:
                 print(f"  [paperdl] Search failed: {exc}")
 
-        # 2. Semantic Scholar fallback
+        # 2. OpenAlex
+        if "openalex" in use_sources:
+            try:
+                oa_papers = _search_openalex(query, max_results=max_results)
+                papers.extend(oa_papers)
+            except Exception as exc:
+                print(f"  [openalex] Search failed: {exc}")
+
+        # 3. Semantic Scholar
         if "semantic_scholar" in use_sources:
             try:
                 ss_papers = _search_semantic_scholar(query, max_results=max_results)
@@ -253,8 +264,8 @@ class PaperSearcher:
             except Exception as exc:
                 print(f"  [semantic-scholar] Search failed: {exc}")
 
-        # 3. If everything failed, try Semantic Scholar as ultimate fallback
-        if not papers and "semantic_scholar" not in use_sources:
+        # 4. If everything failed, try Semantic Scholar as ultimate fallback
+        if not papers and "semantic_scholar" not in use_sources and "openalex" not in use_sources:
             try:
                 papers = _search_semantic_scholar(query, max_results=max_results)
             except Exception:
@@ -581,6 +592,161 @@ def _search_semantic_scholar(
         return []
 
 
+# OpenAlex concept IDs for common social-science / econ fields.
+# Pass one or more to _search_openalex(concept_ids=...) to narrow results.
+OPENALEX_CONCEPTS: dict[str, str] = {
+    "economics":              "C162324750",
+    "development_economics":  "C17744445",
+    "labor_economics":        "C193170522",
+    "econometrics":           "C39432304",
+    "public_economics":       "C175444787",
+    "health_economics":       "C71924100",
+    "political_economy":      "C144133560",
+    "microeconomics":         "C120665230",
+    "macroeconomics":         "C144024400",
+}
+
+
+def _search_openalex(
+    query: str,
+    max_results: int = 20,
+    filter_oa: bool = False,
+    concept_ids: list[str] | None = None,
+    year_from: int | None = None,
+    year_to: int | None = None,
+) -> list[PaperInfo]:
+    """Search OpenAlex API (free, no auth, 250M+ works).
+
+    Parameters
+    ----------
+    query : str
+        Full-text search query.
+    max_results : int
+        Max results (capped at 50 per OpenAlex page limit).
+    filter_oa : bool
+        When True, restrict to open-access works with a PDF URL.
+    concept_ids : list[str] | None
+        OpenAlex concept IDs to filter by (see OPENALEX_CONCEPTS).
+        Example: [OPENALEX_CONCEPTS["economics"]]
+    year_from : int | None
+        Earliest publication year (inclusive).
+    year_to : int | None
+        Latest publication year (inclusive).
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    # Build filter string
+    filters: list[str] = []
+    if filter_oa:
+        filters.append("open_access.is_oa:true")
+    if concept_ids:
+        for cid in concept_ids:
+            filters.append(f"concepts.id:{cid}")
+    if year_from and year_to:
+        filters.append(f"publication_year:{year_from}-{year_to}")
+    elif year_from:
+        filters.append(f"publication_year:>{year_from - 1}")
+    elif year_to:
+        filters.append(f"publication_year:<{year_to + 1}")
+
+    params: dict[str, Any] = {
+        "search": query,
+        "per-page": min(max_results, 50),
+        "select": (
+            "id,title,authorships,publication_year,cited_by_count,"
+            "abstract_inverted_index,doi,open_access,primary_location,"
+            "best_oa_location,type,biblio"
+        ),
+        "mailto": "pipeline@local",  # polite pool — faster responses
+    }
+    if filters:
+        params["filter"] = ",".join(filters)
+
+    print(f"  [openalex] Searching '{query[:60]}'" + (f" (filters: {params['filter']})" if filters else "") + "...")
+    try:
+        r = requests.get(
+            "https://api.openalex.org/works",
+            params=params,
+            timeout=20,
+        )
+        r.raise_for_status()
+        results: list[PaperInfo] = []
+        seen: set[str] = set()
+        for w in r.json().get("results", []) or []:
+            title = (w.get("title") or "").strip()
+            if not title or title.lower() in seen:
+                continue
+            seen.add(title.lower())
+
+            authors_raw = w.get("authorships") or []
+            author_names = [
+                (a.get("author") or {}).get("display_name", "")
+                for a in authors_raw[:3]
+            ]
+            authors_str = ", ".join(n for n in author_names if n)
+            if len(authors_raw) > 3:
+                authors_str += " et al."
+
+            doi_raw = w.get("doi") or ""
+            doi = doi_raw.replace("https://doi.org/", "") if doi_raw else ""
+
+            oa = w.get("open_access") or {}
+            best_oa = w.get("best_oa_location") or {}
+            pdf_url = best_oa.get("pdf_url") or oa.get("oa_url") or ""
+
+            loc = w.get("primary_location") or {}
+            venue_source = (loc.get("source") or {}).get("display_name", "") or ""
+            biblio = w.get("biblio") or {}
+            venue = venue_source or biblio.get("volume", "")
+
+            abstract = _reconstruct_abstract(w.get("abstract_inverted_index"))
+
+            openalex_id = (w.get("id") or "").replace("https://openalex.org/", "")
+            ext_ids: dict[str, str] = {}
+            if doi:
+                ext_ids["DOI"] = doi
+            if openalex_id:
+                ext_ids["OpenAlex"] = openalex_id
+
+            results.append(PaperInfo(
+                title=title,
+                authors=authors_str,
+                year=w.get("publication_year"),
+                venue=venue,
+                citation_count=w.get("cited_by_count") or 0,
+                abstract=abstract,
+                url=doi_raw or f"https://openalex.org/{openalex_id}",
+                open_access_pdf=pdf_url,
+                external_ids=ext_ids,
+                source="openalex",
+                doi=doi,
+            ))
+
+        print(f"  [openalex] Found {len(results)} papers")
+        return results
+    except Exception as exc:
+        print(f"  [openalex] Error: {exc}")
+        return []
+
+
+def _reconstruct_abstract(inverted_index: dict | None) -> str:
+    """Rebuild abstract text from OpenAlex inverted index {word: [positions]}."""
+    if not inverted_index:
+        return ""
+    try:
+        pos_word: list[tuple[int, str]] = []
+        for word, positions in inverted_index.items():
+            for pos in positions:
+                pos_word.append((pos, word))
+        pos_word.sort()
+        return " ".join(w for _, w in pos_word)
+    except Exception:
+        return ""
+
+
 def _fetch_semantic_scholar_pdf(
     paper: PaperInfo,
     output_dir: Path,
@@ -727,7 +893,7 @@ def is_paperdl_available() -> bool:
 
 def get_available_sources() -> list[str]:
     """Return sources available right now (respects mode)."""
-    sources = ["semantic_scholar"]  # always available (uses requests)
+    sources = ["openalex", "semantic_scholar"]  # always available (uses requests)
     if is_paperdl_available():
         sources = PAPERDL_SOURCES + sources
     return sources

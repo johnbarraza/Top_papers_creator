@@ -218,6 +218,58 @@ def _search_semantic_scholar_seed_papers(topic: str, max_results: int = 10) -> l
         return []
 
 
+def _search_openalex_seed_papers(
+    topic: str,
+    max_results: int = 10,
+    filter_oa: bool = False,
+) -> list[dict]:
+    """Search OpenAlex for seed paper candidates.
+
+    Uses economics concept filter when topic looks econ-related to reduce noise.
+    Returns pipeline-compatible dicts (same shape as _search_semantic_scholar_seed_papers).
+    """
+    try:
+        from ..paper_searcher import _search_openalex, OPENALEX_CONCEPTS
+    except ImportError:
+        return []
+
+    # Narrow to economics when topic signals it — reduces noise vs. bare text search
+    _ECON_SIGNALS = [
+        "wage", "employment", "gdp", "inflation", "income", "poverty", "inequality",
+        "labor", "labour", "trade", "tax", "fiscal", "monetary", "growth", "impact",
+        "causal", "difference in differences", "did ", "regression discontinuity",
+        "instrumental variable", "iv ", "rct", "randomized", "experiment",
+        "peru", "perú", "latin america", "developing", "economía", "economia",
+    ]
+    topic_lower = topic.lower()
+    use_concept = any(sig in topic_lower for sig in _ECON_SIGNALS)
+    concept_ids = [OPENALEX_CONCEPTS["economics"]] if use_concept else None
+
+    papers = _search_openalex(
+        topic,
+        max_results=max_results,
+        filter_oa=filter_oa,
+        concept_ids=concept_ids,
+    )
+
+    results = []
+    for p in papers:
+        results.append({
+            "title": p.title,
+            "authors": p.authors,
+            "year": p.year,
+            "venue": p.venue,
+            "citationCount": p.citation_count,
+            "abstract": p.abstract,
+            "url": p.url,
+            "openAccessPdf": {"url": p.open_access_pdf} if p.open_access_pdf else {},
+            "externalIds": p.external_ids,
+            "source": "openalex",
+            "doi": p.doi,
+        })
+    return results
+
+
 def _resolve_paperdl_mode(state: dict | None = None) -> str:
     """Resolve paperdl mode: state config → config.py → env → 'auto'."""
     if state:
@@ -4753,9 +4805,11 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
     # paperdl (arXiv, OpenReview, PMLR, PMC) — richer metadata than SS alone
     seed_papers.extend(_search_paperdl_seed_papers(selected["variant"], max_results=8, mode=paperdl_mode))
     seed_papers.extend(_search_semantic_scholar_seed_papers(selected["variant"], max_results=8))
+    seed_papers.extend(_search_openalex_seed_papers(selected["variant"], max_results=8))
     if selected["variant"] != topic:
         seed_papers.extend(_search_paperdl_seed_papers(topic, max_results=5, mode=paperdl_mode))
         seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=5))
+        seed_papers.extend(_search_openalex_seed_papers(topic, max_results=5))
     for c in selected.get("candidates", []):
         p = _candidate_to_seed_paper(c)
         if p:
@@ -5395,6 +5449,7 @@ Select the TOP 3 and return ONLY a JSON block:
         paperdl_mode = _resolve_paperdl_mode(state)
         seed_papers = _search_paperdl_seed_papers(topic, max_results=8, mode=paperdl_mode)
         seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=8))
+        seed_papers.extend(_search_openalex_seed_papers(topic, max_results=8))
         seed_papers = _dedupe_seed_papers(seed_papers)
         state["stages"]["stage1"]["seed_papers"] = seed_papers
 
