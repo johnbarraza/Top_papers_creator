@@ -270,6 +270,163 @@ def _search_openalex_seed_papers(
     return results
 
 
+def _search_bcrp_research(
+    topic: str,
+    max_results: int = 10,
+    pub_types: list[str] | None = None,
+    fetch_abstracts: bool = True,
+    fetch_abstracts_top_n: int = 5,
+) -> list[dict]:
+    """Search BCRP research portal (investigacion.bcrp.gob.pe).
+
+    Covers Working Papers, Revista Estudios Económicos, and Revista Moneda.
+    Server-side rendered — plain requests, no JS required.
+
+    Parameters
+    ----------
+    pub_types : list[str] | None
+        Filter by publication type. Values: "working_paper", "estudios_economicos",
+        "revista_moneda". None = all types.
+    fetch_abstracts : bool
+        If True, fetch individual paper pages for abstract + PDF URL (top N only).
+    fetch_abstracts_top_n : int
+        How many papers to enrich with abstract + PDF.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    _TYPE_MAP = {
+        "working papers": "working_paper",
+        "documentos de trabajo": "working_paper",
+        "revista estudios económicos": "estudios_economicos",
+        "revista estudios economicos": "estudios_economicos",
+        "revista moneda": "revista_moneda",
+        "moneda": "revista_moneda",
+    }
+
+    print(f"  [bcrp-research] Searching '{topic[:60]}'...")
+    try:
+        r = requests.get(
+            "https://investigacion.bcrp.gob.pe/en/publications/buscador",
+            params={"inavbar_buscar": topic, "sortBy": "newest"},
+            timeout=20,
+            allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (academic research pipeline)"},
+        )
+        r.raise_for_status()
+    except Exception as exc:
+        print(f"  [bcrp-research] Request failed: {exc}")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    cards = soup.find_all("article", attrs={"data-date": True})
+
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    for card in cards:
+        if len(results) >= max_results * 2:
+            break
+
+        # Publication type
+        meta = card.find("div", class_="meta")
+        if not meta:
+            continue
+        meta_text = meta.get_text(" ", strip=True).lower()
+        raw_type = ""
+        for k in _TYPE_MAP:
+            if k in meta_text:
+                raw_type = _TYPE_MAP[k]
+                break
+
+        if pub_types and raw_type not in pub_types:
+            continue
+
+        # Title + URL
+        h3 = card.find("h3", class_="title")
+        if not h3:
+            continue
+        a_tag = h3.find("a")
+        if not a_tag:
+            continue
+        title = a_tag.get_text(strip=True)
+        url = a_tag.get("href", "")
+        if not title or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+
+        # Authors
+        authors_p = card.find("p", class_="authors")
+        authors_str = ""
+        if authors_p:
+            parts = [t.get_text(strip=True).rstrip(";") for t in authors_p.find_all(["a", "span"]) if t.get_text(strip=True)]
+            authors_str = ", ".join(p for p in parts if p)
+
+        # Date / year from data-date attr
+        date_str = card.get("data-date", "")
+        year = None
+        if date_str:
+            try:
+                year = int(date_str[:4])
+            except ValueError:
+                pass
+
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": year,
+            "venue": "BCRP " + (raw_type.replace("_", " ").title() if raw_type else "Research"),
+            "citationCount": 0,
+            "abstract": "",
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {},
+            "source": "bcrp_research",
+            "doi": "",
+            "_pub_type": raw_type,
+        })
+
+    # Enrich top N with abstract + PDF URL
+    if fetch_abstracts and results:
+        to_enrich = [r for r in results if not r["abstract"]][:fetch_abstracts_top_n]
+        for item in to_enrich:
+            try:
+                pr = requests.get(
+                    item["url"], timeout=15, allow_redirects=True,
+                    headers={"User-Agent": "Mozilla/5.0 (academic research pipeline)"},
+                )
+                pr.raise_for_status()
+                ps = BeautifulSoup(pr.text, "html.parser")
+
+                # Abstract — look for section with "resumen" or "abstract" heading
+                abstract = ""
+                for heading in ps.find_all(["h2", "h3", "h4"]):
+                    htext = heading.get_text(strip=True).lower()
+                    if "resumen" in htext or "abstract" in htext:
+                        sibling = heading.find_next_sibling()
+                        if sibling:
+                            abstract = sibling.get_text(" ", strip=True)[:1500]
+                        break
+                item["abstract"] = abstract
+
+                # PDF URL — look for bcrp.gob.pe/docs link
+                for a in ps.find_all("a", href=True):
+                    href = a["href"]
+                    if "bcrp.gob.pe/docs" in href and href.endswith(".pdf"):
+                        item["openAccessPdf"] = {"url": href}
+                        break
+            except Exception:
+                pass
+
+    # Trim to max_results
+    results = results[:max_results]
+    print(f"  [bcrp-research] Found {len(results)} papers")
+    return results
+
+
 def _resolve_paperdl_mode(state: dict | None = None) -> str:
     """Resolve paperdl mode: state config → config.py → env → 'auto'."""
     if state:
@@ -4802,6 +4959,11 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
     if selected["variant"] != topic:
         seed_papers.extend(_search_alicia(topic, max_results=4))
 
+    # BCRP research portal (working papers + journals) — Peru econ literature
+    seed_papers.extend(_search_bcrp_research(selected["variant"], max_results=6, pub_types=["working_paper", "estudios_economicos"]))
+    if selected["variant"] != topic:
+        seed_papers.extend(_search_bcrp_research(topic, max_results=4, pub_types=["working_paper", "estudios_economicos"]))
+
     # paperdl (arXiv, OpenReview, PMLR, PMC) — richer metadata than SS alone
     seed_papers.extend(_search_paperdl_seed_papers(selected["variant"], max_results=8, mode=paperdl_mode))
     seed_papers.extend(_search_semantic_scholar_seed_papers(selected["variant"], max_results=8))
@@ -5450,6 +5612,8 @@ Select the TOP 3 and return ONLY a JSON block:
         seed_papers = _search_paperdl_seed_papers(topic, max_results=8, mode=paperdl_mode)
         seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=8))
         seed_papers.extend(_search_openalex_seed_papers(topic, max_results=8))
+        if _is_peru_topic(topic):
+            seed_papers.extend(_search_bcrp_research(topic, max_results=6, pub_types=["working_paper", "estudios_economicos"]))
         seed_papers = _dedupe_seed_papers(seed_papers)
         state["stages"]["stage1"]["seed_papers"] = seed_papers
 
