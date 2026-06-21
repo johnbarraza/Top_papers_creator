@@ -17,6 +17,13 @@ projects/
 # Downloaded external data
 data/external/
 
+# User data files (CSV, DTA, Parquet, etc.)
+data/*.csv
+data/*.dta
+data/*.parquet
+data/*.xlsx
+data/*.json
+
 # OS junk
 Thumbs.db
 .DS_Store

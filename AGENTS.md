@@ -74,7 +74,7 @@ python run_pipeline.py --status my_project_20260502_145708
 | `pipeline/human_checkpoint.py` | Interactive prompts at Stages 2.5, 3.5 |
 | `pipeline/stages/` | One file per pipeline stage |
 | `check_sources.py` | Health-check all 38 data sources |
-| `requirements.txt` | Python dependencies |
+| `requirements.txt` | Python dependencies (see breakdown below) |
 | `Skills/` | review-paper and review-paper-code skill definitions |
 
 ## Path architecture
@@ -87,6 +87,18 @@ All paths derive from `PAPERS_HQ` in `pipeline/config.py`:
 
 The pipeline must be run from `PAPERS_HQ` (the repo root) so relative
 imports resolve correctly.
+
+## `requirements.txt` — what each group does
+
+| Group | Packages | Why needed |
+|---|---|---|
+| **Core** | pandas, numpy, requests, scipy, matplotlib, scikit-learn, statsmodels | Data loading, cleaning, basic stats, visualization — every stage uses these |
+| **Econometrics** | linearmodels, pyfixest, econml, doubleml, wildboottest, rdrobust, rddensity, bacondecomp, csdid | Stage 4 code generation: panel FE/IV, DML for HTE, cluster-robust inference, RDD, staggered DiD diagnostics |
+| **Peruvian microdata** | inei-microdatos | Programmatic download of INEI surveys (ENAHO, ENDES) — Stage 1 discovery for Peru topics |
+| **PDF handling** | pymupdf, fpdf2, Pillow | Stage 5 (LaTeX→PDF compile check, figure embedding), Stage 7 (replication audit PDF read) |
+| **Optional** | paperdl, owslib, rarfile | `paperdl`: richer seed-paper search (arXiv, OpenReview, PMLR). `owslib`: INGEMMET spatial layers. `rarfile`: extract .rar replication packages |
+
+Install all at once: `pip install -r requirements.txt`
 
 ## Environment variables (optional)
 
@@ -137,3 +149,13 @@ export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
   read-only API probes.
 - All state is in `projects/<name>/pipeline_state.json`. Back it up before
   risky operations.
+
+## Annex: companion projects
+
+These are independent projects that complement Papers-HQ. Agents or users
+may find them useful for related workflows:
+
+| Project | Author | What it does |
+|---|---|---|
+| [academic-research-skills](https://github.com/Imbad0202/academic-research-skills) | [@Imbad0202](https://github.com/Imbad0202) | Claude Code skills for academic research — literature review, paper analysis, LaTeX writing, peer review. Complementary to Papers-HQ; useful as standalone skills or alongside this pipeline. |
+| [AI-research-feedback](https://github.com/claesbackman/AI-research-feedback) | [Claes Bäckman](https://claesbackman.com) | `review-paper` and `review-paper-code` skills (bundled in `Skills/`, used in Stages 4.7 and 6). |
