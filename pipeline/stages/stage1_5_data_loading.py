@@ -78,7 +78,11 @@ def _try_download_dataverse(url: str, data_dir: Path) -> Optional[str]:
     # Extract DOI or persistent ID from URL
     # Formats: https://doi.org/10.7910/DVN/XXXX or https://dataverse.harvard.edu/dataset.xhtml?persistentId=...
     persistent_id = ""
-    if "doi.org/10.7910" in url:
+    if url.startswith("doi:10.7910/"):
+        persistent_id = url
+    elif url.startswith("10.7910/"):
+        persistent_id = "doi:" + url
+    elif "doi.org/10.7910" in url:
         persistent_id = "doi:" + url.split("doi.org/")[-1]
     elif "persistentId=" in url:
         persistent_id = url.split("persistentId=")[-1].split("&")[0]
@@ -752,6 +756,92 @@ def _try_download_direct(url: str, data_dir: Path) -> Optional[str]:
         return None
 
 
+# ── INGEMMET GEOCATMIN WFS download ──────────────────────────────────────────
+
+
+def _try_download_ingemmet(dataset_info: dict, data_dir: Path) -> Optional[str]:
+    """Download INGEMMET GEOCATMIN spatial layer via WFS as GeoJSON.
+
+    Uses owslib if installed for proper WFS GetFeature requests.
+    Falls back to raw OGC WFS HTTP GET with outputFormat=GeoJSON.
+    Saves to data/external/ingemmet/<layer_name>.geojson.
+    """
+    import requests
+
+    wfs_url = dataset_info.get("download_url", "")
+    layer_name = dataset_info.get("name", "ingemmet_layer")
+    if not wfs_url:
+        return None
+
+    ingemmet_dir = data_dir / "ingemmet"
+    ingemmet_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = _safe_filename(layer_name, default="ingemmet_layer") or "ingemmet_layer"
+    out_path = ingemmet_dir / f"{safe_name}.geojson"
+
+    # ── Try owslib first (rich WFS client) ─────────────────────────────────
+    try:
+        from owslib.wfs import WebFeatureService
+
+        print(f"    [ingemmet] Connecting via owslib WFS...")
+        wfs = WebFeatureService(url=wfs_url, version="1.1.0", timeout=30)
+
+        # Pick the first available layer (or all layers)
+        wfs_layers = list(wfs.contents.keys()) if wfs.contents else []
+        if not wfs_layers:
+            print(f"    [ingemmet] No layers found in WFS service")
+            return None
+
+        target_layer = wfs_layers[0]
+        print(f"    [ingemmet] Fetching layer '{target_layer}'...")
+
+        # GetFeature with reasonable max
+        response = wfs.getfeature(
+            typename=[target_layer],
+            outputFormat="application/json",
+            maxfeatures=5000,
+        )
+        data = response.read() if hasattr(response, "read") else response
+        out_path.write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+        size_kb = out_path.stat().st_size / 1024
+        print(f"    [ingemmet] Saved: {out_path.name} ({size_kb:.0f} KB)")
+        return str(out_path)
+
+    except ImportError:
+        print(f"    [ingemmet] owslib not installed — trying raw WFS HTTP")
+    except Exception as e:
+        print(f"    [ingemmet] owslib failed: {e} — trying raw WFS HTTP")
+
+    # ── Fallback: raw OGC WFS HTTP request ─────────────────────────────────
+    try:
+        # Build a WFS GetFeature request manually
+        params = {
+            "service": "WFS",
+            "version": "1.1.0",
+            "request": "GetFeature",
+            "outputFormat": "application/json",
+            "maxFeatures": 5000,
+        }
+        print(f"    [ingemmet] GET {wfs_url[:60]}...")
+        resp = requests.get(wfs_url, params=params, timeout=120)
+        resp.raise_for_status()
+
+        if "application/json" in resp.headers.get("content-type", ""):
+            data = resp.content
+        else:
+            print(f"    [ingemmet] Unexpected content-type: {resp.headers.get('content-type')}")
+            data = resp.content
+
+        out_path.write_bytes(data)
+        size_kb = out_path.stat().st_size / 1024
+        print(f"    [ingemmet] Saved: {out_path.name} ({size_kb:.0f} KB)")
+        return str(out_path)
+
+    except Exception as e:
+        print(f"    [ingemmet] Raw WFS download failed: {e}")
+        return None
+
+
 # ── Profiling (reuse from stage1) ─────────────────────────────────────────────
 
 def _profile_dataset(data_path: str) -> dict:
@@ -1141,11 +1231,28 @@ def run(project_dir: Path, state: dict) -> dict:
 
     # Skip for Path B — data already profiled in Stage 1
     if path == "B" or stage1.get("data_profile"):
-        print("  [skip] Path B — data already profiled in Stage 1")
+        print("  [skip] Path B - data already profiled in Stage 1")
+        profile = stage1.get("data_profile", {}) or {}
+        data_path = stage1.get("data_path", "")
+        existing = state["stages"].get("stage1_5", {}).get("downloaded_datasets", [])
+        downloaded_datasets = existing
+        if data_path and profile and not downloaded_datasets:
+            first_source = (stage1.get("recommended_data_sources", [{}]) or [{}])[0]
+            downloaded_datasets = [{
+                "name": Path(data_path).name,
+                "local_path": data_path,
+                "warnings": [],
+                "profile": profile,
+                "score_ceiling": first_source.get("score_ceiling", 0),
+                "tier": first_source.get("tier", 9),
+            }]
         state["stages"]["stage1_5"] = {
             "status": "skipped",
             "reason": "Path B or data already profiled",
         }
+        if downloaded_datasets:
+            state["stages"]["stage1_5"]["downloaded_datasets"] = downloaded_datasets
+            state["stages"]["stage1_5"]["n_downloaded"] = len(downloaded_datasets)
         save_state(project_dir, state)
         return state
 
@@ -1189,6 +1296,15 @@ def run(project_dir: Path, state: dict) -> dict:
             local_path = _try_download_bcrp(ds, data_dir)
         elif ds.get("source_api") == "minem":
             local_path = _try_download_minem(ds, data_dir)
+        elif ds.get("source_api") == "ingemmet":
+            local_path = _try_download_ingemmet(ds, data_dir)
+        elif ds.get("source_api") == "mef_consulta_amigable":
+            print(f"       [mef] Manual download required — no API available")
+            instructions = ds.get("export_instructions", "")
+            if instructions:
+                for line in instructions.split("\n"):
+                    print(f"       {line}")
+            continue
         elif ds.get("source_api") in ("datosabiertos_curated", "datosabiertos_peru") or "datosabiertos" in provider:
             local_path = _try_download_datosabiertos(ds, data_dir)
         elif "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
@@ -1230,7 +1346,11 @@ def run(project_dir: Path, state: dict) -> dict:
             print("\a", end="", flush=True)
 
             while True:
-                choice = input(f"\n       >> ").strip()
+                try:
+                    choice = input(f"\n       >> ").strip()
+                except EOFError:
+                    choice = "3"
+                    print("\n       [auto] No interactive input available; skipping this dataset")
 
                 if choice == "3" or choice.lower() == "skip":
                     print(f"       [skip] Skipping this dataset\n")

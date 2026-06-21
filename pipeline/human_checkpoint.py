@@ -450,7 +450,12 @@ def idea_selection(top_ideas: list[dict]) -> dict:
     print("\a", end="", flush=True)  # Terminal bell — user input needed
 
     while True:
-        choice = input("\n>> ").strip().upper()
+        try:
+            choice = input("\n>> ").strip().upper()
+        except EOFError:
+            selected = top_ideas[0]
+            print(f"\n  [auto] No interactive input available. Selected idea 1: {selected.get('title')}")
+            return {"action": "SELECT", "selected_idea": selected}
 
         if choice.startswith("SELECT"):
             parts = choice.split()

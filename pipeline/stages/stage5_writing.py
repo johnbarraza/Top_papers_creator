@@ -1324,4 +1324,18 @@ If you CANNOT find a suitable replacement, return:
 
     state["current_stage"] = 5
     save_state(project_dir, state)
+
+    # ── NotebookLM checkpoint (optional, human-confirmed) ──────────────────
+    try:
+        from ..notebooklm_hooks import stage5_notebooklm_checkpoint
+        stage1 = state["stages"].get("stage1", {})
+        topic = stage1.get("topic", "academic research")
+        paper_pdf = paper_dir / "main.pdf"
+        stage5_notebooklm_checkpoint(
+            project_dir, state, topic,
+            paper_pdf=str(paper_pdf) if paper_pdf.exists() else None,
+        )
+    except Exception:
+        pass
+
     return state

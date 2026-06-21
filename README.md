@@ -2,9 +2,12 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Fork of jnichor](https://img.shields.io/badge/fork%20of-jnichor%2FTop__papers__creator-orange)](https://github.com/jnichor/Top_papers_creator)
 [![Stars](https://img.shields.io/github/stars/jnichor/Top_papers_creator?style=social)](https://github.com/jnichor/Top_papers_creator/stargazers)
 [![Powered by Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-D97757)](https://claude.ai/code)
 [![Runs on Antigravity](https://img.shields.io/badge/Runs%20on-Google%20Antigravity-4285F4)](https://antigravity.google/)
+
+> **This is a fork of [jnichor/Top_papers_creator](https://github.com/jnichor/Top_papers_creator).** Additions in this fork: full `requirements.txt`, expanded public-data sources (PUCP, CONCYTEC, UP DSpace), corrected installation guide, and replication-mode beta label.
 
 A hybrid AI–human research pipeline that takes you from a research idea to a submission-ready paper. Claude handles reasoning (ideation, validation, writing, review); Python handles execution (data loading, code generation, statistics, LaTeX compilation). State is persisted between stages so you can stop, resume, or rerun any stage at will.
 
@@ -35,23 +38,166 @@ The pipeline is built on top of the [Claude Code](https://claude.ai/code) CLI an
 
 ## Installation
 
-**Requirements:**
+### Prerequisites
 
-- **[Claude Max subscription](https://www.anthropic.com/pricing)** — the pipeline routes every LLM call through your authenticated Claude session. A pay-per-token Anthropic API key is **not** sufficient: Stages 2, 3, 4, 5, and 6 launch multi-turn conversations and parallel agents whose volume only fits within the Max plan's quotas.
-- **[Google Antigravity](https://antigravity.google/)** — the pipeline is designed to run inside Antigravity's agentic IDE, which hosts the Claude Code session, the long-running terminal context required for Stages 4 and 5 (manual intervention), and the file system access used by the Python orchestrator.
-- Python 3.11+ (tested on 3.14 on Windows)
-- LaTeX distribution with `pdflatex` on `PATH` (TeX Live or MiKTeX)
-- Standard Python packages: `pandas`, `numpy`, `requests` (imported ad-hoc — install on first run)
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — every LLM call runs through `claude -p` (headless mode) via subprocess. Install it once and authenticate with any of the options below.
 
-**Setup:**
+  **Authentication — pick one:**
+  | Option | How |
+  |---|---|
+  | Claude.ai Pro or Max subscription | `claude login` in your terminal |
+  | Anthropic API key | `export ANTHROPIC_API_KEY=sk-...` (or set in `.env`) |
+  | DeepSeek API (cheaper alternative) | See [DeepSeek backend](#deepseek-backend-optional) below |
+
+  > A Pro subscription is sufficient for most runs. Max gives higher rate limits for long parallel stages (4, 5, 6). Any terminal works (VS Code, Windows Terminal, Google Antigravity, etc.) — no special IDE required.
+
+- **Python 3.11+** (tested on 3.14 on Windows)
+- **LaTeX** with `pdflatex` on `PATH` — [TeX Live](https://tug.org/texlive/) (Linux/Mac) or [MiKTeX](https://miktex.org/) (Windows)
+
+---
+
+### Step 1 — Clone
 
 ```bash
 git clone https://github.com/jnichor/Top_papers_creator.git
 cd Top_papers_creator
-pip install pandas numpy requests
 ```
 
-Open the cloned folder inside Google Antigravity, sign in with the Google account linked to your Claude Max subscription, and run the pipeline from Antigravity's integrated terminal. All LLM calls flow through the authenticated session — no Anthropic API key is required. The pipeline also uses free public APIs (Dataverse, Zenodo, GitHub, Semantic Scholar) for dataset discovery and literature review.
+### Step 2 — Create a virtual environment (recommended)
+
+**Using `venv` (built-in):**
+
+```bash
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
+
+# macOS / Linux
+python -m venv .venv
+source .venv/bin/activate
+```
+
+**Using `conda`:**
+
+```bash
+conda create -n papers-hq python=3.12
+conda activate papers-hq
+```
+
+> All subsequent `pip install` commands should run inside the activated environment.
+
+### Step 3 — Install dependencies
+
+**Core + econometrics (required for all modes):**
+
+```bash
+pip install pandas numpy requests scipy matplotlib scikit-learn statsmodels
+pip install linearmodels pyfixest econml doubleml
+pip install wildboottest rdrobust rddensity bacondecomp csdid
+```
+
+**Peruvian microdata — ENAHO, ENDES, and other INEI surveys:**
+
+```bash
+pip install inei-microdatos
+```
+
+**PDF handling (Stage 5 writing + Stage 7 audit):**
+
+```bash
+pip install pymupdf fpdf2 Pillow
+```
+
+Or install everything at once from the lockfile:
+
+```bash
+pip install -r requirements.txt
+```
+
+**Optional packages** (uncomment in `requirements.txt` to enable):
+
+| Package | Enables |
+|---|---|
+| `paperdl` | Richer seed-paper search: arXiv, OpenReview, PMLR, PMC |
+| `owslib` | INGEMMET GEOCATMIN spatial layers (WFS) |
+| `rarfile` | Extract `.rar` replication packages |
+
+```bash
+# Install all optional packages
+pip install paperdl owslib rarfile
+```
+
+### Step 4 — Run
+
+Open the project folder in any terminal (VS Code, Windows Terminal, etc.), make sure Claude Code CLI is authenticated, and run:
+
+```bash
+python run_pipeline.py --topic "Your research topic"
+```
+
+---
+
+### DeepSeek backend (optional) `[experimental — not fully tested]`
+
+> **Warning:** DeepSeek integration has not been tested end-to-end with this pipeline. Multi-turn reasoning, tool use, and parallel agent stages (4, 5, 6) may behave differently from Claude. Use at your own risk and expect edge cases.
+
+Claude Code CLI supports alternative OpenAI-compatible backends via environment variables. To route all pipeline LLM calls through [DeepSeek](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code) instead of Anthropic:
+
+**Windows (PowerShell):**
+
+```powershell
+$env:ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+$env:ANTHROPIC_AUTH_TOKEN="<your DeepSeek API Key>"
+$env:ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_EFFORT_LEVEL="max"
+```
+
+**macOS / Linux (bash):**
+
+```bash
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_AUTH_TOKEN="<your DeepSeek API Key>"
+export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_EFFORT_LEVEL="max"
+```
+
+Then run the pipeline normally — the env vars are picked up automatically by the `claude` subprocess:
+
+```bash
+python run_pipeline.py --topic "Your research topic"
+```
+
+If Claude Code prompts for permissions on every tool call (common with third-party backends), add `--dangerously-skip-permissions` directly to the `claude -p` invocation inside `pipeline/claude_runner.py`:
+
+```python
+# pipeline/claude_runner.py  — _build_cmd()
+cmd = ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text"]
+```
+
+> **Security note:** `--dangerously-skip-permissions` disables Claude Code's built-in permission prompts for file and shell access. Only add it if you understand what the pipeline executes. Never use it on a machine with unreviewed code or sensitive credentials in scope.
+
+The pipeline also uses these free public APIs (no key needed):
+
+| Source | Used for |
+|---|---|
+| Harvard Dataverse, Zenodo | Dataset discovery and download |
+| datosabiertos.gob.pe | Peruvian government open data |
+| INEI microdata portal | ENAHO, ENDES survey download |
+| BCRP REST API | Peruvian macro time series |
+| World Bank, IDB, FAOSTAT | Cross-country panel data |
+| Socrata (~30 US city/state portals) | Municipal open data |
+| Semantic Scholar | Literature review |
+| PUCP, CONCYTEC repositories | Peruvian academic papers (seed papers) |
+| ALICIA (CONCYTEC) | Peruvian open-access papers |
+| GitHub | Replication packages |
 
 
 ## Usage
@@ -67,7 +213,29 @@ python run_pipeline.py --topic "Labor Markets" --data "./panel.csv"
 
 # Path C — Data-first (find the best public datasets, then suggest topics)
 python run_pipeline.py --path-c
+
+# Path C smoke — local microdata, no APIs/Claude/input; stops after Stage 1
+python run_pipeline.py --path-c --smoke --to-stage 1 --project path_c_smoke
 ```
+
+### Replication mode (student assignment / HTE extension) `[beta]`
+
+> **Beta:** replication mode is functional but still under active development. Paper candidate ranking, HTE template generation, and public-data verification work end-to-end — edge cases and some journal-specific replication packages may require manual adjustment.
+
+Replicate an existing paper and add a heterogeneous treatment effects extension.
+
+```text
+# Search by topic — pipeline finds and ranks replication candidates
+python run_pipeline.py --topic "cash transfers Peru" --mode replicate
+
+# Bring your own paper (DOI) — skips candidate selection
+python run_pipeline.py --topic "cash transfers" --mode replicate --paper doi:10.1257/app.20170192
+
+# Bring your own PDF
+python run_pipeline.py --topic "education Peru" --mode replicate --paper ./mypaper.pdf
+```
+
+Stage 2 displays a ranked table of candidates with DOI, identification method, dataset name, data availability badge, and paperdl/arXiv access badge. You pick one (or it is skipped if `--paper` is provided), then the pipeline continues normally through Stages 3–7, generating HTE-specific code templates (`hte_00_clean.py` → `hte_03_output.py`).
 
 ### Resume or inspect an existing project
 
@@ -112,6 +280,39 @@ Calls Dataverse, Zenodo, GitHub, and Semantic Scholar to find candidate datasets
 Generates 8–10 ideas scored by `0.4 × novelty + 0.3 × feasibility + 0.3 × impact`. For Path B, the prompt is constrained to use real variable names from your dataset.
 
 **Output:** `stage2_ideation.md` with the ranked top 3.
+
+#### Replication mode (`--mode replicate`)
+
+Switches Stage 2 to paper-search mode. Candidates are sourced from:
+
+- **[i4replication.org](https://www.i4replication.org/papers)** — 293+ replication-verified papers (activated only in replicate mode)
+- **Semantic Scholar** — general academic search
+- **paperdl** — arXiv, OpenReview, PMLR sources with direct PDF download
+
+Each candidate is enriched without an LLM call (keyword scan) and then a single Haiku batch call refines the top 15:
+
+| Signal | Weight | Detail |
+|---|---|---|
+| Method strength | 40% | RCT=10, IV/RDD=9, DiD=8, … OLS=3 |
+| Public data | 40% | Keyword match against 35+ known open datasets (ENAHO, ENDES, BCRP, MINEDU, datosabiertos.gob.pe, …) |
+| Citation log | 20% | `log(1 + citations)` normalized |
+
+The display shows DOI, method, dataset, public-data badge, and paperdl/arXiv access badge. You pick a candidate interactively, or pass `--paper doi:X` / `--paper ./file.pdf` to skip selection entirely.
+
+Replication ideas follow the schema `extension_type ∈ {REPLICATE, HTE-DML, HTE-CF, HTE-CT, EXTEND-T, EXTEND-Y, EXTEND-X}`. The prompt enforces that angles use the same public dataset as the original paper.
+
+#### HTE code templates
+
+When `detect_design()` returns `"hte"`, Stage 4 uses four fixed-template scripts instead of generating from scratch:
+
+| Script | Purpose |
+|---|---|
+| `hte_00_clean.py` | Load public data, apply sample restrictions, validate Y/D/X, covariate balance (SMD) |
+| `hte_01_main.py` | OLS replication gate (>30% deviation → warning in `results_summary.md`), DML ATE via DoubleML or manual cross-fitting fallback, CATE via CausalForestDML or pseudo-outcome RF fallback |
+| `hte_02_robustness.py` | Propensity overlap trim, alternative learners (Lasso/Ridge), placebo outcomes, leave-one-covariate-out sensitivity |
+| `hte_03_output.py` | Table 1 (replication vs original ATE), Table 2 (DML ATE + robustness), Table 3 (CATE by subgroup), Figure 1 (CATE distribution PDF) |
+
+Stage 3 validation adds a check (#6) that the identified dataset is publicly accessible; non-public data with no substitute is flagged as a feasibility blocker.
 
 ### Stage 2.5 — Idea Selection (human checkpoint)
 
@@ -256,7 +457,7 @@ Each stage records its result under `stages.stage<N>` with at minimum a `status`
 ## Limitations
 
 - **Windows is the primary tested platform.** `os.replace()` atomicity assumes the project directory and the system tempdir live on the same volume — fine on a local disk, not guaranteed on a network share.
-- **Path C is partially implemented.** The flag is wired through but Stage 1 does not yet branch on it; treat it as experimental.
+- **Path C is experimental but implemented.** Stage 1 branches into data-first discovery, downloads/profiles candidates, and can be smoke-tested locally with `--path-c --smoke --to-stage 1`.
 - **Stage 6 R&R has no escalation.** After 3 rounds the paper is marked incomplete; there is no automatic fallback to a less ambitious target.
 - **Method classification is keyword-based.** The identification tier in Stage 4a relies on string matching ("did", "iv", "rdd"). Misspelled or non-standard method names may be misclassified — keep your strategy memo terminology canonical.
 - **No retry/backoff on Semantic Scholar.** Stage 3 uses a 15s timeout but no retry logic; rate-limited responses cause the literature step to fail soft and proceed.
@@ -268,6 +469,17 @@ Each stage records its result under `stages.stage<N>` with at minimum a `status`
 - **Identification scoring** — `pipeline/stage4_strategy.py::_score_identification()`.
 - **Reviewer prompts** — edit the matching skill file in [`Skills/`](Skills/).
 - **Per-project context** — drop a `CLAUDE.md` inside `projects/<name>/` to give the agents project-specific instructions.
+
+
+## Acknowledgements & Credits
+
+| Project | Author | Role in this pipeline |
+|---|---|---|
+| [Top_papers_creator](https://github.com/jnichor/Top_papers_creator) | [@jnichor](https://github.com/jnichor) | Original pipeline — this repo is a fork |
+| [inei-microdatos](https://github.com/fiorellarmartins/inei-microdatos) | [@fiorellarmartins](https://github.com/fiorellarmartins) | Programmatic download of INEI Peru surveys (ENAHO, ENDES, etc.) |
+| [AI-research-feedback](https://github.com/claesbackman/AI-research-feedback) | [Claes Bäckman](https://claesbackman.com) | `review-paper` and `review-paper-code` skills (Stages 6 and 4.7) |
+
+All third-party components are used under their respective open-source licenses (MIT unless otherwise noted).
 
 
 ## License

@@ -56,6 +56,136 @@ def _load_data(state):
         return None, str(e)
 
 
+def _stage1_profile_from_download(item):
+    """Convert a Stage 1.5 downloaded dataset entry to Stage 1 profile shape."""
+    profile = item.get("profile", {}) or {}
+    return {
+        "rows": profile.get("rows", 0),
+        "cols": profile.get("cols", 0),
+        "columns": profile.get("columns", []),
+        "structure": profile.get("structure", "unknown"),
+        "panel_flag": profile.get("panel_flag", False),
+        "panel_details": profile.get("panel_details", {}),
+        "id_cols": profile.get("id_cols", []),
+        "time_cols": profile.get("time_cols", []),
+        "wide_panel": profile.get("wide_panel"),
+        "data_summary": profile.get("data_summary", ""),
+    }
+
+
+def _dataset_match_score(item, idea):
+    """Score how well a downloaded dataset matches the selected idea."""
+    profile = item.get("profile", {}) or {}
+    columns = [str(c).lower() for c in profile.get("columns", [])]
+    haystack = " ".join([
+        str(item.get("name", "")),
+        str(Path(item.get("local_path", "")).name),
+        " ".join(columns),
+    ]).lower()
+
+    required = idea.get("required_variables", []) or []
+    if isinstance(required, str):
+        required = [required]
+    required_hits = sum(1 for v in required if str(v).lower() in columns)
+
+    score = required_hits * 10
+    dataset_file = str(idea.get("dataset_file", "")).lower()
+    if dataset_file and dataset_file in Path(item.get("local_path", "")).name.lower():
+        score += 50
+
+    data_sources = idea.get("data_sources", []) or []
+    if isinstance(data_sources, str):
+        data_sources = [data_sources]
+    for src in data_sources:
+        src_terms = [
+            t for t in str(src).lower().replace("/", " ").replace("_", " ").split()
+            if len(t) >= 4
+        ]
+        score += sum(2 for t in src_terms if t in haystack)
+
+    idea_terms = " ".join([
+        str(idea.get("title", "")),
+        str(idea.get("research_question", "")),
+        str(idea.get("method", "")),
+        str(idea.get("identification_source", "")),
+    ]).lower().replace("/", " ").replace("_", " ").split()
+    score += sum(1 for t in idea_terms if len(t) >= 5 and t in haystack)
+    return score
+
+
+def _select_dataset_for_idea(state, idea):
+    """Pick the downloaded dataset that best matches the selected idea."""
+    stage1 = state["stages"].get("stage1", {})
+    downloaded = state["stages"].get("stage1_5", {}).get("downloaded_datasets", []) or []
+    usable = [
+        item for item in downloaded
+        if item.get("local_path") and Path(item.get("local_path")).exists()
+    ]
+    if not usable:
+        return stage1.get("data_path", ""), stage1.get("data_profile", {}), None, []
+
+    scored = sorted(
+        ((item, _dataset_match_score(item, idea)) for item in usable),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    best, best_score = scored[0]
+    diagnostics = [
+        {
+            "name": item.get("name", ""),
+            "local_path": item.get("local_path", ""),
+            "score": score,
+        }
+        for item, score in scored
+    ]
+
+    if best_score >= 5:
+        return best.get("local_path", ""), _stage1_profile_from_download(best), best, diagnostics
+
+    # If there is only one user-provided/default dataset and the idea did not
+    # name a source precisely, keep current behavior. Otherwise fail early:
+    # the idea is asking for data that is not among the downloaded files.
+    has_explicit_source = bool(idea.get("dataset_file") or idea.get("data_sources"))
+    if has_explicit_source:
+        return "", {}, None, diagnostics
+    return stage1.get("data_path", ""), stage1.get("data_profile", {}), None, diagnostics
+
+
+def _missing_external_sources(state, idea):
+    """Return idea data sources that are not among downloaded local files."""
+    data_sources = idea.get("data_sources", []) or []
+    if isinstance(data_sources, str):
+        data_sources = [data_sources]
+    if not data_sources:
+        return []
+
+    downloaded = state["stages"].get("stage1_5", {}).get("downloaded_datasets", []) or []
+    stage1_path = state["stages"].get("stage1", {}).get("data_path", "")
+    local_names = set()
+    for item in downloaded:
+        path = item.get("local_path", "")
+        name = item.get("name", "")
+        if path:
+            p = Path(path)
+            local_names.add(p.name.lower())
+            local_names.add(p.stem.lower())
+        if name:
+            local_names.add(str(name).lower())
+            local_names.add(Path(str(name)).stem.lower())
+    if stage1_path:
+        p = Path(stage1_path)
+        local_names.add(p.name.lower())
+        local_names.add(p.stem.lower())
+
+    missing = []
+    for src in data_sources:
+        src_text = str(src).lower()
+        if any(name and name in src_text for name in local_names):
+            continue
+        missing.append(str(src))
+    return missing
+
+
 def _detect_design(idea):
     """Detect the identification design from the idea metadata."""
     method = (idea.get("method", "") + " " + idea.get("identification_source", "")).lower()
@@ -70,6 +200,93 @@ def _detect_design(idea):
         return "iv"
     else:
         return "generic"
+
+
+def _record_rejected_idea(state, idea, flags, source):
+    """Persist failed idea/data matches so Stage 2 can avoid repeating them."""
+    stage2 = state.setdefault("stages", {}).setdefault("stage2", {})
+    rejected = stage2.setdefault("rejected_ideas", [])
+    title = idea.get("title", "Untitled idea")
+    method = idea.get("method", "")
+    research_question = idea.get("research_question", "")
+
+    entry = {
+        "title": title,
+        "method": method,
+        "research_question": research_question,
+        "source": source,
+        "flags": flags[:12],
+        "rejected_at": datetime.now().isoformat(),
+    }
+
+    signature = (title, method, research_question)
+    existing = {
+        (x.get("title", ""), x.get("method", ""), x.get("research_question", ""))
+        for x in rejected
+    }
+    if signature not in existing:
+        rejected.append(entry)
+    return rejected
+
+
+def _block_or_regenerate(project_dir, state, selected_idea, flags, source,
+                         feasibility_result=None, programmatic_flags=None):
+    """Stop an impossible idea and let the user reselect or regenerate ideas."""
+    _record_rejected_idea(state, selected_idea, flags, source)
+
+    print(f"\n  {'=' * 60}")
+    print("  This idea is not feasible with the loaded dataset.")
+    print("  The pipeline will not continue to code/paper generation with")
+    print("  missing variables, wrong treatment timing, or invalid panel structure.")
+    print(f"\n  Options:")
+    print("    1 - Try a different idea from the current Stage 2 list")
+    if source == "dataset_selection":
+        print("    2 - Re-run Stage 1 data discovery with these blockers")
+    else:
+        print("    2 - Regenerate Stage 2 ideas using these blockers as constraints")
+    print("    3 - Stop and provide a different dataset")
+    print(f"  {'=' * 60}")
+    print("\a", end="", flush=True)
+
+    while True:
+        try:
+            choice = input("\n  >> ").strip()
+        except EOFError:
+            choice = "2"
+            print("\n  [auto] No interactive input available; choosing option 2.")
+        if choice == "1":
+            print("  [loop] Returning to Stage 2.5 to select a different idea.")
+            action = "retry_idea"
+            break
+        if choice == "2":
+            if source == "dataset_selection":
+                print("  [loop] Returning to Stage 1 to find matching data.")
+                action = "rediscover_data"
+            else:
+                print("  [loop] Returning to Stage 2 to generate dataset-compatible ideas.")
+                action = "regenerate_ideas"
+            break
+        if choice == "3":
+            print("  [stop] Provide new data and restart from Stage 1.")
+            sys.exit(0)
+        print("  Enter 1, 2, or 3.")
+
+    payload = {
+        "status": "failed",
+        "action": action,
+        "flags": flags,
+        "blocked": True,
+        "block_source": source,
+        "completed_at": datetime.now().isoformat(),
+    }
+    if feasibility_result is not None:
+        payload["feasibility"] = feasibility_result
+    if programmatic_flags is not None:
+        payload["programmatic_flags"] = programmatic_flags
+
+    state["stages"]["stage3_3"] = payload
+    save_state(project_dir, state)
+    return state
 
 
 def _quick_did_test(df, outcome_col, treat_col, entity_col, time_col):
@@ -173,10 +390,50 @@ def run(project_dir: Path, state: dict) -> dict:
     stage1 = state["stages"].get("stage1", {})
     stage2_5 = state["stages"].get("stage2_5", {})
     selected_idea = stage2_5.get("selected_idea", {})
-    data_path = stage1.get("data_path", "")
-    data_profile = stage1.get("data_profile", {})
+    data_path, data_profile, matched_dataset, dataset_matches = _select_dataset_for_idea(
+        state, selected_idea
+    )
+
+    if matched_dataset:
+        current_path = stage1.get("data_path", "")
+        if data_path != current_path:
+            print(f"  [3.3] Matched idea to dataset: {Path(data_path).name}")
+            state["stages"]["stage1"]["data_path"] = data_path
+            state["stages"]["stage1"]["data_profile"] = data_profile
+            save_state(project_dir, state)
+        else:
+            print(f"  [3.3] Using matched dataset: {Path(data_path).name}")
+    elif dataset_matches and not data_path:
+        flags = [
+            "No downloaded dataset matches the selected idea's data_sources/"
+            "dataset_file/required_variables.",
+            "Downloaded files: " + ", ".join(
+                f"{Path(m['local_path']).name} (score={m['score']})"
+                for m in dataset_matches[:5]
+            ),
+        ]
+        return _block_or_regenerate(
+            project_dir,
+            state,
+            selected_idea,
+            flags,
+            source="dataset_selection",
+        )
 
     if not data_path or not Path(data_path).exists():
+        if selected_idea:
+            flags = [
+                "No local data file is available for the selected idea. "
+                "Stage 3.3 cannot validate variables, treatment, outcome, "
+                "or identification without a loaded dataset."
+            ]
+            return _block_or_regenerate(
+                project_dir,
+                state,
+                selected_idea,
+                flags,
+                source="dataset_selection",
+            )
         print("  [3.3] No data file available -- skipping quick test")
         state["stages"]["stage3_3"] = {
             "status": "skipped",
@@ -187,6 +444,8 @@ def run(project_dir: Path, state: dict) -> dict:
         return state
 
     # Load data
+    state["stages"]["stage1"]["data_path"] = data_path
+    state["stages"]["stage1"]["data_profile"] = data_profile
     df, err = _load_data(state)
     if df is None:
         print(f"  [3.3] Cannot load data: {err} -- skipping")
@@ -226,6 +485,38 @@ def run(project_dir: Path, state: dict) -> dict:
                 entity_col = col_map[candidate]
                 break
 
+    # Find or construct treatment and outcome
+    # Try to detect a natural "post" or treatment variable
+    design = _detect_design(selected_idea)
+    missing_sources = _missing_external_sources(state, selected_idea)
+    if missing_sources:
+        flags = [
+            "Selected idea requires external data sources that are not loaded: "
+            + "; ".join(missing_sources[:5])
+        ]
+        return _block_or_regenerate(
+            project_dir,
+            state,
+            selected_idea,
+            flags,
+            source="dataset_selection",
+        )
+
+    if (not time_col or not entity_col) and design in ("did", "staggered_did"):
+        print(f"  [3.3] Cannot identify time/entity columns for {design} design")
+        print(f"        time_col={time_col}, entity_col={entity_col}")
+        flags = [
+            f"{design} requires a valid entity-by-time panel, but the loaded "
+            f"dataset has time_col={time_col} and entity_col={entity_col}."
+        ]
+        return _block_or_regenerate(
+            project_dir,
+            state,
+            selected_idea,
+            flags,
+            source="programmatic_design_validation",
+        )
+
     if not time_col or not entity_col:
         print(f"  [3.3] Cannot identify time/entity columns -- skipping")
         print(f"        time_col={time_col}, entity_col={entity_col}")
@@ -236,9 +527,6 @@ def run(project_dir: Path, state: dict) -> dict:
         save_state(project_dir, state)
         return state
 
-    # Find or construct treatment and outcome
-    # Try to detect a natural "post" or treatment variable
-    design = _detect_design(selected_idea)
     print(f"  [3.3] Design detected: {design}")
     print(f"  [3.3] Entity: {entity_col}, Time: {time_col}")
 
@@ -349,13 +637,29 @@ Keep it SIMPLE. For staggered DiD: define treatment as post-onset. For standard 
     try:
         exec(treat_code, {"df": df, "pd": pd, "np": np})
     except Exception as e:
-        print(f"  [3.3] Treatment construction failed: {e} -- skipping")
-        state["stages"]["stage3_3"] = {
-            "status": "skipped", "reason": "treat_code_error: %s" % str(e)[:100],
-            "completed_at": datetime.now().isoformat(),
-        }
-        save_state(project_dir, state)
-        return state
+        if "Cannot convert non-finite values" in str(e) and ".astype(int)" in treat_code:
+            retry_code = treat_code.replace(".astype(int)", ".astype(float)")
+            print("  [3.3] Treatment code hit missing values; retrying with float dtype.")
+            try:
+                exec(retry_code, {"df": df, "pd": pd, "np": np})
+                treat_code = retry_code
+            except Exception as retry_e:
+                print(f"  [3.3] Treatment construction failed: {retry_e} -- skipping")
+                state["stages"]["stage3_3"] = {
+                    "status": "skipped",
+                    "reason": "treat_code_error: %s" % str(retry_e)[:100],
+                    "completed_at": datetime.now().isoformat(),
+                }
+                save_state(project_dir, state)
+                return state
+        else:
+            print(f"  [3.3] Treatment construction failed: {e} -- skipping")
+            state["stages"]["stage3_3"] = {
+                "status": "skipped", "reason": "treat_code_error: %s" % str(e)[:100],
+                "completed_at": datetime.now().isoformat(),
+            }
+            save_state(project_dir, state)
+            return state
 
     # Validate exec produced the expected column
     if "treat" not in df.columns:
@@ -634,14 +938,32 @@ Keep it SIMPLE. For staggered DiD: define treatment as post-onset. For standard 
                 entities_last = set(df.loc[df[time_col] == last_period, entity_col].unique())
                 overlap = entities_first & entities_last
                 overlap_pct = 100 * len(overlap) / max(len(entities_first), 1)
+                obs_per_period = len(df) / max(n_periods, 1)
+                median_obs_per_entity = df.groupby(entity_col).size().median()
                 print(f"    Entity overlap first/last period: {len(overlap)} "
                       f"({overlap_pct:.0f}%)")
-                if overlap_pct < 50:
+                if overlap_pct < 10:
+                    programmatic_flags.append({
+                        "check": "did_not_panel",
+                        "severity": "CRITICAL",
+                        "detail": f"Only {overlap_pct:.0f}% of entities appear in both first "
+                                  f"and last period. This is not a valid unit panel for DiD.",
+                    })
+                elif overlap_pct < 50:
                     programmatic_flags.append({
                         "check": "did_not_panel",
                         "severity": "WARNING",
                         "detail": f"Only {overlap_pct:.0f}% of entities appear in both first "
                                   f"and last period. May be repeated cross-sections, not panel.",
+                    })
+                if n_periods > 100 and obs_per_period < 5 and median_obs_per_entity <= 1:
+                    programmatic_flags.append({
+                        "check": "did_time_looks_like_timestamp",
+                        "severity": "CRITICAL",
+                        "detail": f"Time variable '{time_col}' has {n_periods} near-unique "
+                                  f"values with {obs_per_period:.1f} obs/period and median "
+                                  f"{median_obs_per_entity:.0f} obs/entity. It looks like a "
+                                  f"survey timestamp, not a policy period.",
                     })
 
             # B6. Staggered: check cohort variation
@@ -880,31 +1202,17 @@ Keep it SIMPLE. For staggered DiD: define treatment as post-onset. For standard 
     if not programmatic_flags:
         print(f"\n  All programmatic checks passed for {design} design.")
 
-    # If critical programmatic issues, offer to re-select before Claude check
+    # If critical programmatic issues, do not continue to Claude/code generation.
     if critical_prog:
-        print(f"\n  Options:")
-        print(f"    1 - Proceed to Claude feasibility check anyway")
-        print(f"    2 - Try a different idea from Stage 2")
-        print("\a", end="", flush=True)
-
-        while True:
-            choice = input("\n  >> ").strip()
-            if choice == "1":
-                print("  [ok] Proceeding to Claude feasibility check.")
-                break
-            elif choice == "2":
-                print("  [loop] Returning to Stage 2.5.")
-                state["stages"]["stage3_3"] = {
-                    "status": "failed",
-                    "action": "retry_idea",
-                    "flags": [f"{f['check']}: {f['detail']}" for f in critical_prog],
-                    "programmatic_flags": programmatic_flags,
-                    "completed_at": datetime.now().isoformat(),
-                }
-                save_state(project_dir, state)
-                return state
-            else:
-                print("  Enter 1 or 2.")
+        flags = [f"{f['check']}: {f['detail']}" for f in critical_prog]
+        return _block_or_regenerate(
+            project_dir,
+            state,
+            selected_idea,
+            flags,
+            source="programmatic_design_validation",
+            programmatic_flags=programmatic_flags,
+        )
 
     # ===================================================================
     # TEST -1: Idea-Dataset Feasibility Check (Claude-based)
@@ -1078,36 +1386,22 @@ Be CONSERVATIVE: only flag CRITICAL if the analysis truly cannot be done.
     ]
     het_vars_ok = []  # Will be populated below if no critical problems
 
-    # If critical problems, offer to re-select
+    # If critical problems, do not allow "proceed anyway". Missing variables,
+    # wrong treatment definitions, and invalid data structure cannot be adapted
+    # downstream without changing the idea or the data.
     if critical_problems:
-        print(f"\n  {'=' * 60}")
-        print(f"  The selected idea has {len(critical_problems)} critical ")
-        print(f"  compatibility problem(s) with this dataset.")
-        print(f"\n  Options:")
-        print(f"    1 - Proceed anyway (analysis will be adapted)")
-        print(f"    2 - Try a different idea from Stage 2")
-        print(f"  {'=' * 60}")
-        print("\a", end="", flush=True)
-
-        while True:
-            choice = input("\n  >> ").strip()
-            if choice == "1":
-                print("  [ok] Proceeding — analysis will need adaptation.")
-                break
-            elif choice == "2":
-                print("  [loop] Returning to Stage 2.5 to select a different idea.")
-                state["stages"]["stage3_3"] = {
-                    "status": "failed",
-                    "action": "retry_idea",
-                    "flags": [f"{p.get('category', '?')}: {p.get('description', '?')}"
-                              for p in critical_problems],
-                    "feasibility": feasibility_result,
-                    "completed_at": datetime.now().isoformat(),
-                }
-                save_state(project_dir, state)
-                return state
-            else:
-                print("  Enter 1 or 2.")
+        flags = [
+            f"{p.get('category', '?')}: {p.get('description', '?')}"
+            for p in critical_problems
+        ]
+        return _block_or_regenerate(
+            project_dir,
+            state,
+            selected_idea,
+            flags,
+            source="claude_feasibility_check",
+            feasibility_result=feasibility_result,
+        )
 
     # ===================================================================
     # TEST 0: Package Availability & Estimator Verification
@@ -1251,44 +1545,51 @@ Be CONSERVATIVE: only flag CRITICAL if the analysis truly cannot be done.
     else:
         print("\n  [3.3] All tested estimators work on this data.")
 
-    # ===================================================================
-    # TEST 1: Basic DiD
-    # ===================================================================
-    print("\n  [3.3] Test 1: Basic DiD...")
-    did_result = _quick_did_test(df, outcome_col, "treat", entity_col, time_col)
-    if did_result["error"]:
-        print(f"  [3.3] DiD failed: {did_result['error']}")
-    else:
-        sig = "***" if did_result["p"] < 0.01 else "**" if did_result["p"] < 0.05 else "*" if did_result["p"] < 0.1 else ""
-        print(f"  [3.3] ATT = {did_result['att']:+.4f} (SE={did_result['se']:.4f}, "
-              f"p={did_result['p']:.4f}){sig}  N={did_result['n']:,}")
+    design = _detect_design(selected_idea)
+    did_result = {"att": np.nan, "se": np.nan, "p": np.nan, "n": 0, "error": "not_did_design"}
+    perm_p = np.nan
+    trend_result = {"att": np.nan, "p": np.nan}
 
-    # ===================================================================
-    # TEST 2: Permutation test (200 permutations for speed)
-    # ===================================================================
-    print("  [3.3] Test 2: Permutation test (200 draws)...")
-    perm_p = _quick_permutation_test(df, outcome_col, "treat", entity_col, time_col,
-                                      n_perms=200)
-    if not np.isnan(perm_p):
-        print(f"  [3.3] Permutation p-value: {perm_p:.3f}")
-    else:
-        print(f"  [3.3] Permutation test failed")
+    if design in ("did", "staggered_did"):
+        # ===================================================================
+        # TEST 1: Basic DiD
+        # ===================================================================
+        print("\n  [3.3] Test 1: Basic DiD...")
+        did_result = _quick_did_test(df, outcome_col, "treat", entity_col, time_col)
+        if did_result["error"]:
+            print(f"  [3.3] DiD failed: {did_result['error']}")
+        else:
+            sig = "***" if did_result["p"] < 0.01 else "**" if did_result["p"] < 0.05 else "*" if did_result["p"] < 0.1 else ""
+            print(f"  [3.3] ATT = {did_result['att']:+.4f} (SE={did_result['se']:.4f}, "
+                  f"p={did_result['p']:.4f}){sig}  N={did_result['n']:,}")
 
-    # ===================================================================
-    # TEST 3: Country/entity trends
-    # ===================================================================
-    print("  [3.3] Test 3: Entity-specific trends...")
-    trend_result = _quick_trend_test(df, outcome_col, "treat", entity_col, time_col)
-    if not np.isnan(trend_result["att"]):
-        print(f"  [3.3] ATT with trends = {trend_result['att']:+.4f} "
-              f"(p={trend_result['p']:.4f})")
+        # ===================================================================
+        # TEST 2: Permutation test (200 permutations for speed)
+        # ===================================================================
+        print("  [3.3] Test 2: Permutation test (200 draws)...")
+        perm_p = _quick_permutation_test(df, outcome_col, "treat", entity_col, time_col,
+                                          n_perms=200)
+        if not np.isnan(perm_p):
+            print(f"  [3.3] Permutation p-value: {perm_p:.3f}")
+        else:
+            print(f"  [3.3] Permutation test failed")
+
+        # ===================================================================
+        # TEST 3: Country/entity trends
+        # ===================================================================
+        print("  [3.3] Test 3: Entity-specific trends...")
+        trend_result = _quick_trend_test(df, outcome_col, "treat", entity_col, time_col)
+        if not np.isnan(trend_result["att"]):
+            print(f"  [3.3] ATT with trends = {trend_result['att']:+.4f} "
+                  f"(p={trend_result['p']:.4f})")
+        else:
+            print(f"  [3.3] Trend test failed")
     else:
-        print(f"  [3.3] Trend test failed")
+        print(f"\n  [3.3] Tests 1-3 skipped: {design} design is not a DiD/event-study design.")
 
     # ===================================================================
     # TEST 4: DESIGN-SPECIFIC IDENTIFICATION TESTS
     # ===================================================================
-    design = _detect_design(selected_idea)
     design_flags = []
 
     if design == "iv":
@@ -1562,6 +1863,8 @@ Be CONSERVATIVE: only flag CRITICAL if the analysis truly cannot be done.
         "estimator_warnings": estimator_warnings,
         "het_vars_ok": het_vars_ok,
         "het_vars_flagged": het_vars_flagged,
+        "analysis_data_path": data_path,
+        "analysis_data_file": Path(data_path).name if data_path else "",
         "completed_at": datetime.now().isoformat(),
     }
 

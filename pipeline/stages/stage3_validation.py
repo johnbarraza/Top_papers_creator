@@ -232,6 +232,18 @@ def run(project_dir: Path, state: dict) -> dict:
     replication_context = ""
     if stage2.get("mode") == "replication":
         chosen_paper = stage2.get("chosen_paper", {})
+        _data_public = chosen_paper.get("_data_public", False)
+        _dataset_name = (
+            chosen_paper.get("_dataset_name")
+            or chosen_paper.get("_data_source_kw")
+            or "not identified"
+        )
+        data_public_note = (
+            f"DATA VERIFIED PUBLIC: YES — {_dataset_name}"
+            if _data_public else
+            f"DATA VERIFIED PUBLIC: NO — dataset '{_dataset_name}' not confirmed publicly accessible. "
+            f"Check whether a public substitute (ENAHO, ENDES, datosabiertos.gob.pe) can reproduce the result."
+        )
         replication_context = f"""
 PAPER MODE: Replication / HTE extension
 
@@ -241,6 +253,7 @@ Authors: {chosen_paper.get('authors', 'N/A')}
 Year: {chosen_paper.get('year', 'N/A')}
 Venue: {chosen_paper.get('venue', 'N/A')}
 URL: {chosen_paper.get('url', 'N/A')}
+{data_public_note}
 
 REPLICATION-SPECIFIC VALIDATION:
 You MUST evaluate whether:
@@ -249,6 +262,8 @@ You MUST evaluate whether:
 3. The HTE extension is connected to the original paper rather than a new unrelated project.
 4. Baseline ATE replication happens before CATE/heterogeneity claims.
 5. Overlap, treatment variation, sample size, and pre-treatment covariates are sufficient for HTE.
+6. The dataset used in the paper is publicly accessible (or a public substitute is available).
+   If data is NOT public and no substitute exists, flag this as a feasibility blocker.
 """
 
     idea_text = f"""RESEARCH IDEA SUBMISSION

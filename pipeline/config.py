@@ -3,13 +3,15 @@
 from pathlib import Path
 
 # ── Directory layout ─────────────────────────────────────────────────────────
-PAPERS_HQ     = Path(__file__).resolve().parent.parent
-PIPELINE_ROOT = PAPERS_HQ.parent
+PAPERS_HQ     = Path(__file__).resolve().parent.parent  # Top_papers_creator/
 
-SEARCH_REPO   = PIPELINE_ROOT / "search-repositories"
-JUNSHI_REPO   = PIPELINE_ROOT / "research-junshi"
 EVAL_REPO     = PAPERS_HQ / "idea-evaluation-pipeline"
 CLO_AUTHOR    = PAPERS_HQ / "clo-author"
+
+# External companion repos (clone alongside Top_papers_creator/ if needed)
+# These are NOT required for the pipeline to run — only Stage 1 optional enrichment.
+# SEARCH_REPO   = PAPERS_HQ.parent / "search-repositories"
+# JUNSHI_REPO   = PAPERS_HQ.parent / "research-junshi"
 
 # ── Stage constants ──────────────────────────────────────────────────────────
 MAX_STAGE3_PIVOTS   = 2      # Stage 3: max pivot iterations before stall warning
@@ -29,9 +31,23 @@ REJECT_FLOOR        = 40     # avg < 40 with fatal issues -> REJECT
 # Backwards compatibility aliases
 MAX_EVAL_LOOPS = MAX_STAGE3_PIVOTS
 
+# ── paperdl integration ──────────────────────────────────────────────────────
+# "auto": use paperdl if installed, fall back to Semantic Scholar
+# "on":   require paperdl — fail loudly if not installed
+# "off":  skip paperdl entirely, use only Semantic Scholar
+# Can be overridden via env: PIPELINE_PAPERDL=on|off|auto
+import os
+PAPERDL_MODE = os.environ.get("PIPELINE_PAPERDL", "auto")
+
+# ── NotebookLM integration ───────────────────────────────────────────────────
+# "auto": offer NotebookLM at checkpoints, require human confirmation
+# "on":   same as auto, but fail if notebooklm-py not installed/logged in
+# "off":  skip NotebookLM entirely
+# Can be overridden via env: PIPELINE_NOTEBOOKLM=on|off|auto
+NOTEBOOKLM_MODE = os.environ.get("PIPELINE_NOTEBOOKLM", "auto")
+
 # ── Claude Code CLI defaults ─────────────────────────────────────────────────
 # No API key needed — uses `claude -p` (headless mode) via subprocess.
-import os
 CLAUDE_TIMEOUT      = int(os.environ.get("PIPELINE_CLAUDE_TIMEOUT", 600))
 PYTHON_TIMEOUT      = int(os.environ.get("PIPELINE_PYTHON_TIMEOUT", 600))
 MAX_PARALLEL_AGENTS = int(os.environ.get("PIPELINE_MAX_PARALLEL", 2))

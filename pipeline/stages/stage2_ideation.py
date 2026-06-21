@@ -4,6 +4,7 @@ Generates 8-10 research ideas from seed papers, scores them, and selects the top
 """
 
 import json
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,67 @@ from ..config import get_profile
 from ..claude_runner import run_claude
 from ..json_utils import extract_json
 from ..state import save_state
+from ..paper_searcher import PaperSearcher, is_paperdl_available, PAPERDL_SOURCES, _resolve_paperdl_mode
+
+
+# ---------------------------------------------------------------------------
+# Known public Peruvian datasets — used to auto-detect data availability
+# ---------------------------------------------------------------------------
+
+_KNOWN_PUBLIC_PERU = {
+    # INEI surveys
+    "enaho", "endes", "epen", "cenagro", "enapres", "renamu", "eea",
+    "encuesta nacional de hogares", "encuesta demografica", "encuesta de empleo",
+    "inei", "microdatos inei",
+    # Government portals
+    "datosabiertos.gob.pe", "datos abiertos peru", "midis", "minedu", "escale",
+    "minem", "osce", "ocds", "bcrp", "sbs", "osiptel", "punku",
+    "consulta amigable", "siaf", "ministerio de educacion", "ministerio de economia",
+    "fissal", "essalud", "minsa", "ipress",
+    # International with Peru data
+    "world bank peru", "banco mundial peru", "iadb peru", "bid peru",
+    "cepal peru", "eclac peru",
+}
+
+# Method keywords → canonical method name
+_METHOD_KEYWORDS = {
+    "difference-in-differences": ["diff-in-diff", "difference-in-differences",
+                                   "difference in difference", "differences-in-differences",
+                                   "diferencias en diferencias", "diference en diferencias",
+                                   " did ", "didactic"],
+    "regression discontinuity": ["rdd", "regression discontinuity", "discontinuity design",
+                                  "discontinuidad en regresion", "regresion discontinua"],
+    "instrumental variables": ["instrumental variable", "iv estimation", "two-stage least squares",
+                                "2sls", "tsls", "variables instrumentales"],
+    "randomized controlled trial": ["rct", "randomized", "randomised", "experimento aleatorio",
+                                     "field experiment", "experimento de campo"],
+    "event study": ["event study", "estudio de evento"],
+    "synthetic control": ["synthetic control", "control sintetico"],
+    "double machine learning": ["dml", "double machine learning", "debiased machine learning",
+                                 "partially linear"],
+    "causal forest": ["causal forest", "generalized random forest", "grf", "econml"],
+    "panel fixed effects": ["fixed effects", "twfe", "two-way fixed effects", "efectos fijos",
+                             "panel data", "datos de panel"],
+    "matching": ["propensity score matching", "psm", "matching estimator", "apareamiento"],
+    "ols": ["ordinary least squares", "ols regression", "linear regression",
+             "minimos cuadrados ordinarios"],
+}
+
+# Score by method identification strength (0-10)
+_METHOD_SCORES = {
+    "randomized controlled trial": 10,
+    "instrumental variables": 9,
+    "regression discontinuity": 9,
+    "difference-in-differences": 8,
+    "synthetic control": 8,
+    "event study": 7,
+    "double machine learning": 7,
+    "causal forest": 7,
+    "panel fixed effects": 5,
+    "matching": 5,
+    "ols": 3,
+    "unknown": 2,
+}
 
 
 def run(project_dir: Path, state: dict) -> dict:
@@ -115,8 +177,23 @@ def _data_source_to_replication_candidate(ds: dict) -> dict | None:
     }
 
 
+def _resolve_mode(state: dict) -> str:
+    """Resolve paperdl mode: state config → config.py → env → 'auto'."""
+    mode = state.get("config", {}).get("paperdl", "")
+    if mode in ("auto", "on", "off"):
+        return mode
+    return _resolve_paperdl_mode()
+
+
 def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict]:
-    """Merge Stage 1 seed papers, replication packages, and a fresh S2 search."""
+    """Merge Stage 1 seed papers, replication packages, and multi-source search.
+
+    Search order:
+      1. Stage 1 seed papers (already found in discovery)
+      2. Replication packages from data sources
+      3. paperdl search (arXiv, OpenReview, PMLR, etc.) — if mode allows
+      4. Semantic Scholar API (always available as fallback)
+    """
     stage1 = state["stages"].get("stage1", {})
     papers = list(stage1.get("seed_papers", []) or [])
 
@@ -134,6 +211,21 @@ def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict
             papers.append(p)
 
     topic = stage1.get("selected_variant") or stage1.get("topic", "")
+    mode = _resolve_mode(state)
+
+    # ── paperdl search (multi-source: arXiv, PMC) ──
+    if topic and mode != "off" and is_paperdl_available():
+        try:
+            econ_sources = ["arxiv", "pmc"]  # PMLR removed — ML proceedings, 0 econ results, 15min per search
+            searcher = PaperSearcher(sources=econ_sources, mode=mode)
+            paperdl_results = searcher.search(topic, max_results=10)
+            print(f"  [paperdl] Found {len(paperdl_results)} replication candidates")
+            for pi in paperdl_results:
+                papers.append(pi.to_pipeline_dict())
+        except Exception as exc:
+            print(f"  [paperdl] Replication candidate search failed: {exc}")
+
+    # ── Semantic Scholar fallback ──
     if topic:
         papers.extend(_search_semantic_scholar_for_replication(topic, max_results=8))
 
@@ -148,8 +240,135 @@ def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict
     return deduped
 
 
+def _detect_method_from_text(text: str) -> str:
+    """Fast keyword scan on abstract/title — no LLM needed for clear cases."""
+    lower = text.lower()
+    for method, keywords in _METHOD_KEYWORDS.items():
+        if any(kw in lower for kw in keywords):
+            return method
+    return "unknown"
+
+
+def _detect_public_data_from_text(text: str) -> tuple[bool, str]:
+    """Return (is_public, matched_source) based on known public dataset keywords."""
+    lower = text.lower()
+    for kw in _KNOWN_PUBLIC_PERU:
+        if kw in lower:
+            return True, kw
+    # Generic public signals
+    for sig in ("open data", "publicly available", "public dataset",
+                "datos abiertos", "datos públicos", "harvard dataverse",
+                "icpsr", "zenodo", "openicpsr", "aea data"):
+        if sig in lower:
+            return True, sig
+    return False, ""
+
+
+def _replicate_score(paper: dict) -> float:
+    """Score a candidate for replication suitability (0–10).
+
+    Weights: method strength 0.4 + data public 0.4 + citation signal 0.2
+    """
+    method = paper.get("_method", "unknown")
+    method_score = _METHOD_SCORES.get(method, 2)
+
+    data_public = paper.get("_data_public", False)
+    has_oa_pdf = bool((paper.get("openAccessPdf") or {}).get("url"))
+    has_pkg = bool(paper.get("replication_package_url"))
+    data_score = 10 if (data_public or has_pkg) else (5 if has_oa_pdf else 1)
+
+    cites = paper.get("citationCount", paper.get("citations", 0)) or 0
+    # log-scale: 0 cites→0, 10→3.3, 100→6.6, 1000→10
+    cite_score = min(10, math.log1p(cites) / math.log1p(1000) * 10)
+
+    return round(0.4 * method_score + 0.4 * data_score + 0.2 * cite_score, 2)
+
+
+def _enrich_with_method_and_data(papers: list[dict]) -> list[dict]:
+    """Enrich candidate papers with method, dataset, and public-data detection.
+
+    Step 1: Fast keyword scan (no LLM) fills _method, _data_public, _data_source.
+    Step 2: ONE Claude call (sonnet, low effort) for top 15 candidates to fill gaps
+            and extract the dataset name from the abstract.
+    Step 3: Compute _replicate_score for ranking.
+    Falls back to keyword-only if Claude call fails.
+    """
+    enriched = []
+    for p in papers:
+        text = " ".join([
+            p.get("title", ""),
+            p.get("abstract", ""),
+            p.get("venue", ""),
+        ])
+        method = _detect_method_from_text(text)
+        is_public, source_kw = _detect_public_data_from_text(text)
+        p = dict(p)  # shallow copy — don't mutate caller's list
+        p.setdefault("_method", method)
+        p.setdefault("_data_public", is_public)
+        p.setdefault("_data_source_kw", source_kw)
+        p.setdefault("_dataset_name", source_kw or "")
+        enriched.append(p)
+
+    # ── LLM enrichment for top 15 (fills dataset name + corrects method) ──
+    top = enriched[:15]
+    abstracts_block = "\n\n".join(
+        f"[{i}] Title: {p.get('title', 'N/A')}\n"
+        f"    Abstract: {(p.get('abstract') or '')[:400]}"
+        for i, p in enumerate(top, 1)
+    )
+    prompt = f"""For each paper below extract: (1) the primary empirical method,
+(2) the main dataset used, (3) whether that dataset is publicly available.
+
+Be concise. If the abstract doesn't mention data explicitly, infer from context.
+Mark data as public if it's a national survey, government administrative data,
+open registry, or available via a public repository.
+
+{abstracts_block}
+
+Return ONLY a JSON array (length {len(top)}), one object per paper in order:
+```json
+[
+  {{
+    "idx": 1,
+    "method": "difference-in-differences",
+    "dataset_name": "ENAHO Peru",
+    "data_public": true,
+    "data_note": "INEI public microdata"
+  }}
+]
+```
+Allowed method values: {', '.join(_METHOD_SCORES.keys())}
+"""
+    try:
+        response = run_claude(prompt, model="haiku", effort="low")
+        parsed = extract_json(response)
+        if isinstance(parsed, list):
+            for item in parsed:
+                idx = item.get("idx", 0)
+                if 1 <= idx <= len(top):
+                    p = top[idx - 1]
+                    if item.get("method") in _METHOD_SCORES:
+                        p["_method"] = item["method"]
+                    if item.get("dataset_name"):
+                        p["_dataset_name"] = item["dataset_name"]
+                    if "data_public" in item:
+                        p["_data_public"] = bool(item["data_public"])
+                    if item.get("data_note"):
+                        p["_data_note"] = item["data_note"]
+    except Exception as exc:
+        print(f"  [enrich] LLM enrichment skipped: {exc}")
+
+    # ── Compute replicate_score for all ──
+    for p in enriched:
+        p["_replicate_score"] = _replicate_score(p)
+
+    # Sort by score descending so best candidates appear first
+    enriched.sort(key=lambda x: x["_replicate_score"], reverse=True)
+    return enriched
+
+
 def _display_and_choose_paper(papers: list[dict]) -> dict:
-    """Show candidate papers and return the selected one."""
+    """Show enriched candidate papers ranked by replicate score and return selected."""
     if not papers:
         return {
             "title": "User topic replication target",
@@ -163,34 +382,107 @@ def _display_and_choose_paper(papers: list[dict]) -> dict:
             "source": "fallback",
         }
 
-    print("\n  Replication candidates:")
-    for i, p in enumerate(papers[:10], 1):
-        authors = p.get("authors") or "Unknown authors"
+    display = papers[:10]
+    best_idx = 0  # index in display of highest score (already sorted)
+
+    print("\n  +-- Replication candidates (ranked by method strength x data availability) --+")
+    for i, p in enumerate(display, 1):
+        title = p.get("title", "Untitled")[:80]
+        authors = (p.get("authors") or "Unknown")[:40]
         year = p.get("year") or "n.d."
-        cites = p.get("citationCount", p.get("citations", 0))
-        title = p.get("title", "Untitled")
-        print(f"  [{i}] {title[:95]}")
-        print(f"      {authors} ({year}) | citations: {cites} | {p.get('source', '?')}")
+        cites = p.get("citationCount", p.get("citations", 0)) or 0
+        method = p.get("_method", "unknown")
+        dataset = p.get("_dataset_name") or p.get("_data_source_kw") or "?"
+        score = p.get("_replicate_score", 0.0)
+        data_public = p.get("_data_public", False)
+        has_pkg = bool(p.get("replication_package_url"))
+        has_oa = bool((p.get("openAccessPdf") or {}).get("url"))
+        data_note = p.get("_data_note", "")
+
+        # DOI — prefer externalIds, fall back to URL
+        ext_ids = p.get("externalIds") or {}
+        doi = ext_ids.get("DOI") or ext_ids.get("doi") or ""
+        if not doi:
+            url = p.get("url", "")
+            if "doi.org/" in url:
+                doi = url.split("doi.org/")[-1].split(" ")[0]
+        doi_str = f"DOI: {doi}" if doi else p.get("url", "")[:60]
+
+        # paperdl availability badges
+        arxiv_id = ext_ids.get("ArXiv") or ext_ids.get("arxiv") or ""
+        has_arxiv = bool(arxiv_id)
+        oa_url = (p.get("openAccessPdf") or {}).get("url", "")
+        if has_arxiv:
+            pdf_badge = f"[paperdl: arXiv:{arxiv_id[:12]}]"
+        elif has_oa:
+            pdf_badge = "[paperdl: OA PDF OK]"
+        elif has_pkg:
+            pdf_badge = "[replication pkg OK]"
+        else:
+            pdf_badge = "[PDF no encontrado]"
+
+        # Data badge
+        if data_public or has_pkg:
+            data_badge = "DATA PUBLICA OK"
+        elif has_oa:
+            data_badge = "OA PDF OK"
+        else:
+            data_badge = "data no verificada"
+
+        star = " ** RECOMENDADO **" if i == best_idx + 1 else ""
+        print(f"\n  [{i}] {title}{star}")
+        print(f"      {authors} ({year}) | citas: {cites}")
+        print(f"      {doi_str}")
+        print(f"      Método: {method:<30} Score: {score:.1f}/10")
+        print(f"      Dataset: {dataset:<28} [{data_badge}]  {pdf_badge}")
+        if data_note:
+            print(f"      Nota: {data_note[:80]}")
+
+    print("  +--------------------------------------------------------------------------+")
 
     if not sys.stdin.isatty():
-        print("  [replication] Non-interactive run: selecting candidate 1.")
-        return papers[0]
+        print(f"  [replication] Non-interactive: selecting candidate 1 (score {display[0].get('_replicate_score', 0):.1f}).")
+        return display[0]
 
     while True:
-        choice = input("\n  Select paper number [1]: ").strip()
+        choice = input(f"\n  Selecciona número de paper [1={display[0].get('title','')[:30]}...]: ").strip()
         if not choice:
-            return papers[0]
-        if choice.isdigit() and 1 <= int(choice) <= min(len(papers), 10):
-            return papers[int(choice) - 1]
-        print("  Enter a valid candidate number.")
+            return display[0]
+        if choice.isdigit() and 1 <= int(choice) <= len(display):
+            return display[int(choice) - 1]
+        print("  Ingresa un número válido.")
 
 
-def _fetch_paper_content(paper: dict, project_dir: Path) -> dict:
-    """Fetch OA PDF when available; otherwise return abstract/metadata."""
+def _fetch_paper_content(paper: dict, project_dir: Path, mode: str = "auto") -> dict:
+    """Fetch paper PDF via paperdl + direct URL + Semantic Scholar fallback.
+
+    Uses PaperSearcher.download() which tries:
+      1. paperdl source-specific download (if paper is from arXiv, PMLR, etc.)
+      2. Direct OA PDF URL download
+      3. Semantic Scholar OA PDF
+    """
+    papers_dir = project_dir / "papers"
+    papers_dir.mkdir(exist_ok=True)
+
+    # ── Try PaperSearcher (paperdl + direct + SS fallback) ──
+    if mode != "off":
+        try:
+            searcher = PaperSearcher(mode=mode)
+            local_path = searcher.download(paper, str(papers_dir))
+            if local_path:
+                print(f"  [paper] Downloaded via PaperSearcher: {Path(local_path).name}")
+                return {
+                    "source": "pdf",
+                    "local_path": local_path,
+                    "url": paper.get("url", ""),
+                    "text_excerpt": paper.get("abstract", ""),
+                }
+        except Exception as exc:
+            print(f"  [paper] PaperSearcher download failed: {exc}")
+
+    # ── Fallback: direct OA PDF URL ──
     pdf_url = (paper.get("openAccessPdf") or {}).get("url")
     if pdf_url:
-        papers_dir = project_dir / "papers"
-        papers_dir.mkdir(exist_ok=True)
         try:
             import re
             import requests
@@ -310,14 +602,149 @@ def _fallback_replication_ideas(chosen_paper: dict, state: dict) -> list[dict]:
     ]
 
 
+def _resolve_paper_from_source(paper_source: str, project_dir: Path) -> dict:
+    """Build a paper dict from --paper flag value.
+
+    Accepts:
+      doi:10.1257/aer.20190829  → Semantic Scholar lookup by DOI
+      ./path/to/paper.pdf       → local file, build minimal dict
+    """
+    import requests
+
+    # ── DOI path ──────────────────────────────────────────────────────────
+    if paper_source.lower().startswith("doi:"):
+        doi = paper_source[4:].strip()
+        print(f"  [paper] Resolving DOI: {doi}")
+        try:
+            r = requests.get(
+                f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
+                params={"fields": "title,authors,year,venue,citationCount,abstract,url,openAccessPdf,externalIds"},
+                timeout=15,
+            )
+            r.raise_for_status()
+            p = r.json()
+            authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
+            if len(p.get("authors") or []) > 3:
+                authors += " et al."
+            paper = {
+                "title": (p.get("title") or doi).strip(),
+                "authors": authors,
+                "year": p.get("year"),
+                "venue": p.get("venue", ""),
+                "citationCount": p.get("citationCount", 0),
+                "abstract": p.get("abstract") or "",
+                "url": p.get("url") or f"https://doi.org/{doi}",
+                "openAccessPdf": p.get("openAccessPdf") or {},
+                "externalIds": p.get("externalIds") or {},
+                "source": "doi_specified",
+                "_data_public": False,
+                "_method": "unknown",
+                "_dataset_name": "",
+            }
+            print(f"  [paper] Found: {paper['title'][:70]}")
+            return paper
+        except Exception as e:
+            print(f"  [paper] DOI lookup failed ({e}), using stub.")
+            return {
+                "title": f"Paper {doi}",
+                "authors": "",
+                "year": None,
+                "venue": "",
+                "citationCount": 0,
+                "abstract": "",
+                "url": f"https://doi.org/{doi}",
+                "openAccessPdf": {},
+                "source": "doi_specified",
+                "_data_public": False,
+                "_method": "unknown",
+                "_dataset_name": "",
+            }
+
+    # ── Local PDF path ────────────────────────────────────────────────────
+    from pathlib import Path as _P
+    pdf_path = _P(paper_source)
+    if not pdf_path.is_absolute():
+        pdf_path = _P.cwd() / pdf_path
+
+    if pdf_path.exists():
+        print(f"  [paper] Using local file: {pdf_path.name}")
+        return {
+            "title": pdf_path.stem.replace("_", " ").replace("-", " "),
+            "authors": "",
+            "year": None,
+            "venue": "",
+            "citationCount": 0,
+            "abstract": "",
+            "url": "",
+            "openAccessPdf": {"url": str(pdf_path)},
+            "local_path": str(pdf_path),
+            "source": "local_pdf",
+            "_data_public": False,
+            "_method": "unknown",
+            "_dataset_name": "",
+        }
+
+    print(f"  [paper] Path not found: {paper_source} — using fallback stub.")
+    return {
+        "title": paper_source,
+        "authors": "",
+        "year": None,
+        "venue": "",
+        "citationCount": 0,
+        "abstract": "",
+        "url": "",
+        "openAccessPdf": {},
+        "source": "specified",
+        "_data_public": False,
+        "_method": "unknown",
+        "_dataset_name": "",
+    }
+
+
 def _run_replication_mode(project_dir: Path, state: dict) -> dict:
     """Generate replication/HTE extension ideas while preserving Stage 2 schema."""
     stage1 = state["stages"].get("stage1", {})
     topic = stage1.get("topic", "academic research")
-    candidates = _collect_replication_candidates(project_dir, state)
-    chosen_paper = _display_and_choose_paper(candidates)
-    paper_content = _fetch_paper_content(chosen_paper, project_dir)
+    mode = _resolve_mode(state)
+
+    paper_source = state.get("config", {}).get("paper_source")
+    if paper_source:
+        chosen_paper = _resolve_paper_from_source(paper_source, project_dir)
+    else:
+        candidates = _collect_replication_candidates(project_dir, state)
+        print(f"  [enrich] Analyzing {len(candidates)} candidates for method + data availability…")
+        candidates = _enrich_with_method_and_data(candidates)
+        chosen_paper = _display_and_choose_paper(candidates)
+
+    paper_content = _fetch_paper_content(chosen_paper, project_dir, mode=mode)
     data_context = _replication_data_context(state)
+
+    # Build data availability context from enrichment results
+    _data_public = chosen_paper.get("_data_public", False)
+    _dataset_name = (
+        chosen_paper.get("_dataset_name")
+        or chosen_paper.get("_data_source_kw")
+        or ""
+    )
+    data_availability_note = ""
+    if _data_public and _dataset_name:
+        data_availability_note = (
+            f"\nDATA AVAILABILITY: The original paper uses publicly accessible data "
+            f"({_dataset_name}). All HTE angles MUST use this same public dataset "
+            f"or a comparable publicly available substitute. Do NOT propose angles "
+            f"that require confidential or proprietary data."
+        )
+    elif _data_public:
+        data_availability_note = (
+            f"\nDATA AVAILABILITY: Public data verified for this paper. "
+            f"Prioritize angles using the same public dataset."
+        )
+    else:
+        data_availability_note = (
+            f"\nDATA AVAILABILITY: Public data access NOT verified. "
+            f"Prefer angles that can be executed with ENAHO, ENDES, or other "
+            f"Peruvian open microdata as a substitute."
+        )
 
     prompt = f"""You are a rigorous empirical research advisor.
 
@@ -335,6 +762,7 @@ Venue: {chosen_paper.get('venue', 'N/A')}
 URL: {chosen_paper.get('url', 'N/A')}
 Abstract/metadata:
 {paper_content.get('text_excerpt', '')[:6000]}
+{data_availability_note}
 
 AVAILABLE DATA:
 {data_context}
@@ -342,6 +770,7 @@ AVAILABLE DATA:
 Generate 5-8 replication or extension angles. Each angle must be a complete
 Stage 2 idea compatible with the existing pipeline. Prefer angles that first
 replicate the original ATE, then extend to HTE only if the data can support it.
+All proposed data_sources must be publicly accessible.
 
 Allowed extension types:
 - REPLICATE
@@ -427,7 +856,10 @@ def _run_ideation_normal(project_dir: Path, state: dict) -> dict:
         sources_context += (
             "These datasets have been downloaded and profiled. "
             "Your ideas MUST use variables that ACTUALLY EXIST in these datasets. "
-            "For each idea, specify WHICH dataset and WHICH variables it uses.\n\n"
+            "For each idea, specify WHICH exact dataset file and WHICH exact "
+            "variables it uses. Do NOT name an external dataset unless it is "
+            "listed here as downloaded, or explicitly mark it as required "
+            "external data not yet available.\n\n"
         )
         for i, ds in enumerate(downloaded_datasets, 1):
             profile = ds.get("profile", {})
@@ -903,6 +1335,31 @@ HARD CONSTRAINTS on what methods are feasible:
 *** an ambitious but flawed Tier 1 design that referees will destroy. ***
 """
 
+    prior_rejections = state["stages"].get("stage2", {}).get("rejected_ideas", [])
+    rejection_block = ""
+    if prior_rejections:
+        lines = []
+        for idx, rejected in enumerate(prior_rejections[-5:], 1):
+            flags = rejected.get("flags", [])
+            flags_text = "; ".join(str(f) for f in flags[:5])
+            lines.append(
+                f"{idx}. {rejected.get('title', 'Untitled idea')} "
+                f"({rejected.get('method', 'unknown method')})\n"
+                f"   Failed because: {flags_text}"
+            )
+        rejection_block = f"""
+## *** PREVIOUS IDEA-DATASET FAILURES TO AVOID ***
+
+Stage 3.3 already rejected the following idea/data matches. Do NOT regenerate
+near-duplicates, and do NOT require variables, rollout dates, panel structure, or
+treatment definitions that caused these failures:
+
+{chr(10).join(lines)}
+
+*** Treat these as hard negative examples. New ideas must use variables and
+structure that actually exist in the loaded dataset. ***
+"""
+
     prompt = f"""You are a bold but REALISTIC research advisor (Junshi). Your task:
 
 RESEARCH AREA: {topic}
@@ -978,6 +1435,7 @@ HARD RULES:
 {identification_guidance}
 {power_warning}
 {feasibility_block}
+{rejection_block}
 {panel_enforcement}
 {data_context}
 {sources_context}
@@ -1044,6 +1502,8 @@ IMPORTANT: At the end, output a JSON block:
       "title": "...",
       "research_question": "...",
       "method": "DiD with continuous treatment intensity",
+      "dataset_file": "exact downloaded filename.csv",
+      "required_variables": ["exact_treatment_col", "exact_outcome_col", "exact_id_col", "exact_time_col"],
       "identification_level": "B",
       "identification_source": "Pre-determined English proficiency creates differential treatment intensity",
       "sub_topic": "informality",
@@ -1067,11 +1527,14 @@ IMPORTANT: At the end, output a JSON block:
     response = run_claude(prompt, model=p["model"], effort=p["effort"], output_file=output_file)
     ideas_data = extract_json(response)
 
+    previous_rejections = state["stages"].get("stage2", {}).get("rejected_ideas", [])
     state["stages"]["stage2"] = {
         "status": "completed",
         "output_file": str(output_file),
         "completed_at": datetime.now().isoformat(),
     }
+    if previous_rejections:
+        state["stages"]["stage2"]["rejected_ideas"] = previous_rejections
 
     if ideas_data and "top_ideas" in ideas_data:
         state["stages"]["stage2"]["top_ideas"] = ideas_data["top_ideas"]
@@ -1081,4 +1544,15 @@ IMPORTANT: At the end, output a JSON block:
 
     state["current_stage"] = 2
     save_state(project_dir, state)
+
+    # ── NotebookLM checkpoint (optional, human-confirmed) ──────────────────
+    try:
+        from ..notebooklm_hooks import stage2_notebooklm_checkpoint
+        stage1 = state["stages"].get("stage1", {})
+        topic = stage1.get("topic", "academic research")
+        top_ideas = state["stages"]["stage2"].get("top_ideas", [])
+        stage2_notebooklm_checkpoint(project_dir, state, topic, top_ideas)
+    except Exception:
+        pass
+
     return state

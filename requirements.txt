@@ -1,0 +1,53 @@
+# ── Core ──────────────────────────────────────────────────────────────────────
+pandas>=1.2
+numpy>=1.24
+requests>=2.28
+beautifulsoup4>=4.12
+lxml>=4.9
+scipy>=1.10
+matplotlib>=3.6
+scikit-learn>=1.2
+statsmodels>=0.14
+
+# ── Econometrics ───────────────────────────────────────────────────────────────
+# Panel FE, IV, DiD (Stage 4 analysis scripts)
+linearmodels>=4.0
+
+# Fast fixed-effects (alternative to linearmodels for large panels)
+pyfixest
+
+# Machine learning for causal inference — DML, CausalForestDML (HTE mode)
+econml
+doubleml
+
+# Cluster-robust inference
+wildboottest
+
+# Regression discontinuity
+rdrobust
+rddensity
+
+# Staggered DiD diagnostics
+bacondecomp
+csdid
+
+# ── Peruvian microdata ────────────────────────────────────────────────────────
+# Programmatic download of INEI surveys (ENAHO, ENDES, etc.)
+inei-microdatos>=0.2
+
+# ── PDF handling ───────────────────────────────────────────────────────────────
+pymupdf>=1.20        # PDF reading (fitz)
+fpdf2>=2.7           # PDF generation
+Pillow>=9.0          # Image handling
+
+# ── Optional ───────────────────────────────────────────────────────────────────
+# Uncomment to enable:
+
+# Paper search across arXiv, OpenReview, PMLR, PMC (Stage 1 seed papers)
+# paperdl
+
+# INGEMMET GEOCATMIN WFS spatial layers
+# owslib
+
+# Extract .rar replication packages
+# rarfile

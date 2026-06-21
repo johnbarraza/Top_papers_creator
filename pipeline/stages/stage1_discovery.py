@@ -218,6 +218,569 @@ def _search_semantic_scholar_seed_papers(topic: str, max_results: int = 10) -> l
         return []
 
 
+def _search_up_repository(
+    topic: str,
+    max_results: int = 8,
+) -> list[dict]:
+    """Search Universidad del Pacífico DSpace repository via Playwright.
+
+    UP's DSpace is protected by within.website bot-detection which blocks plain
+    requests and OAI-PMH. Playwright (real Chromium) bypasses it. Gracefully
+    returns [] if playwright is not installed.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    import re
+    from urllib.parse import quote as _url_quote
+
+    print(f"  [up-repo] Searching '{topic[:60]}'...")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                )
+            )
+            page = ctx.new_page()
+            page.goto(
+                f"https://repositorio.up.edu.pe/search?query={_url_quote(topic)}&rpp={min(max_results * 2, 20)}",
+                wait_until="networkidle",
+                timeout=30000,
+            )
+            page.wait_for_timeout(2000)
+            html = page.content()
+            browser.close()
+    except Exception as exc:
+        print(f"  [up-repo] Browser error: {exc}")
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    # Each result: anchor with /item/ href and meaningful title
+    for a_title in soup.find_all("a", href=lambda h: h and h.startswith("/item/")):
+        title = a_title.get_text(strip=True)
+        if len(title) < 10 or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+
+        url = "https://repositorio.up.edu.pe" + a_title["href"]
+
+        # Walk up to result container (stops when text > 300 chars)
+        container = a_title
+        for _ in range(8):
+            if container.parent is None:
+                break
+            container = container.parent
+            if len(container.get_text(" ", strip=True)) > 300:
+                break
+
+        # Authors: links to /browse/author/
+        author_tags = container.find_all("a", href=lambda h: h and "browse/author" in h)
+        authors = [t.get_text(strip=True).rstrip(",;") for t in author_tags[:4]]
+        authors_str = ", ".join(a for a in authors if a)
+        if len(author_tags) > 4:
+            authors_str += " et al."
+
+        # Date: text matching YYYY-MM or YYYY pattern NOT inside an <a>
+        year = None
+        for el in container.find_all(string=True):
+            if el.parent and el.parent.name == "a":
+                continue
+            m = re.search(r"\b((?:19|20)\d{2})(?:-\d{2})?\b", el.strip())
+            if m:
+                year = int(m.group(1))
+                break
+
+        # Abstract: first <p> tag
+        abstract = ""
+        p_tag = container.find("p")
+        if p_tag:
+            abstract = p_tag.get_text(" ", strip=True)[:1000]
+
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": year,
+            "venue": "UP Repositorio Institucional",
+            "citationCount": 0,
+            "abstract": abstract,
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {},
+            "source": "up_dspace",
+            "doi": "",
+        })
+
+        if len(results) >= max_results:
+            break
+
+    print(f"  [up-repo] Found {len(results)} papers")
+    return results
+
+
+def _faculty_up_fetch_html(url: str) -> str:
+    """Launch UC browser, wait for Cloudflare to clear, return page HTML."""
+    import undetected_chromedriver as uc
+    import time
+
+    options = uc.ChromeOptions()
+    driver = uc.Chrome(options=options, version_main=148)
+    try:
+        driver.get(url)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            t = driver.title.lower()
+            if "momento" not in t and "moment" not in t:
+                break
+            time.sleep(1)
+        time.sleep(4)  # concept badges are JS-rendered, need extra settle
+        return driver.page_source
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
+def _faculty_up_abstract_from_doi(doi: str) -> str:
+    """Fetch abstract from Semantic Scholar using DOI. Returns '' on failure."""
+    try:
+        import requests
+        r = requests.get(
+            f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
+            params={"fields": "abstract"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json().get("abstract") or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _faculty_up_abstract_from_page(pub_url: str) -> str:
+    """Fetch abstract from individual FacultyUP publication page. Returns '' on failure."""
+    try:
+        from bs4 import BeautifulSoup
+        html = _faculty_up_fetch_html(pub_url)
+        soup = BeautifulSoup(html, "html.parser")
+        # Abstract is in div with class containing 'abstractportal'
+        for div in soup.find_all("div", class_=lambda c: c and "abstractportal" in " ".join(c)):
+            tb = div.find("div", class_="textblock")
+            if tb:
+                return tb.get_text(" ", strip=True)
+        # Fallback: BibTeX abstract field
+        for div in soup.find_all("div", class_=lambda c: c and "bibtex" in " ".join(c)):
+            import re
+            m = re.search(r'abstract\s*=\s*"([^"]+)"', div.get_text(" ", strip=True))
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_faculty_up_page(soup, seen: set, max_needed: int) -> list[dict]:
+    """Parse one FacultyUP search results page. Returns new results only."""
+    import re
+    results = []
+    for li in soup.find_all("li", class_="list-result-item"):
+        if len(results) >= max_needed:
+            break
+        a_title = li.find(
+            "a",
+            href=lambda h: h and "/publications/" in h and "?" not in h and len(h) > 20,
+        )
+        if not a_title:
+            continue
+        title = a_title.get_text(strip=True)
+        if len(title) < 10 or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+
+        pub_url = (
+            a_title["href"] if a_title["href"].startswith("http")
+            else "https://faculty.up.edu.pe" + a_title["href"]
+        )
+        div_r = a_title.find_parent("div", class_="rendering")
+        div_text = div_r.get_text(" ", strip=True) if div_r else li.get_text(" ", strip=True)
+
+        authors_str = ""
+        text_after_title = div_text[len(title):].strip()
+        m_yr = re.search(r"\b((?:19|20)\d{2})\b", text_after_title)
+        if m_yr:
+            authors_raw = text_after_title[: m_yr.start()].strip().rstrip(",;& ")
+            authors_list = [
+                a.strip().rstrip(".,;")
+                for a in re.split(r"\s*[,&]\s*", authors_raw)
+                if a.strip() and len(a.strip()) > 1
+            ]
+            authors_str = ", ".join(a for a in authors_list if a)
+
+        year = None
+        m = re.search(r"\b((?:19|20)\d{2})\b", div_text)
+        if m:
+            year = int(m.group(1))
+
+        venue = "FacultyUP - Universidad del Pacífico"
+        m = re.search(r"\bIn:\s*([^.\n]+)", div_text)
+        if m:
+            venue = m.group(1).strip().split(".")[0].strip()
+
+        is_oa = bool(li.find("div", class_="open-access"))
+
+        keywords: list[str] = []
+        for badge in li.find_all("button", class_="concept-badge-small"):
+            kw_text = re.sub(r"\s*\d+%\s*$", "", badge.get_text(strip=True)).strip()
+            if kw_text and kw_text not in keywords:
+                keywords.append(kw_text)
+
+        doi = ""
+        for a_link in li.find_all("a", href=re.compile(r"plu\.mx")):
+            m_doi = re.search(r"doi=([^&]+)", a_link["href"])
+            if m_doi:
+                doi = m_doi.group(1)
+                break
+
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": year,
+            "venue": venue,
+            "citationCount": 0,
+            "abstract": "",
+            "keywords": keywords,
+            "openAccess": is_oa,
+            "url": pub_url,
+            "openAccessPdf": {},
+            "externalIds": {"DOI": doi} if doi else {},
+            "source": "faculty_up",
+            "doi": doi,
+        })
+    return results
+
+
+def _search_faculty_up(
+    topic: str,
+    max_results: int = 8,
+    fetch_abstracts: bool = True,
+) -> list[dict]:
+    """Search faculty.up.edu.pe (PURE portal) via undetected-chromedriver.
+
+    Cloudflare blocks plain requests and headless Playwright. UC non-headless
+    passes the JS challenge. Supports pagination (50 results/page).
+    Gracefully returns [] if undetected_chromedriver or beautifulsoup4 missing.
+
+    Extracts: title, authors, year, venue, DOI, open-access status, keywords.
+    Enriches abstract via S2 API (DOI present) or individual page fetch (no DOI).
+    """
+    try:
+        import undetected_chromedriver as uc
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    import re
+    import time
+    from urllib.parse import quote as _url_quote
+
+    print(f"  [faculty-up] Searching '{topic[:60]}'...")
+    base_url = (
+        f"https://faculty.up.edu.pe/en/publications/"
+        f"?search={_url_quote(topic)}&searchBy=PartOfNameOrTitle"
+    )
+
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    options = uc.ChromeOptions()
+    driver = uc.Chrome(options=options, version_main=148)
+    try:
+        page_num = 0
+        while len(results) < max_results:
+            url = base_url if page_num == 0 else f"{base_url}&page={page_num}"
+            driver.get(url)
+
+            if page_num == 0:
+                # Wait for Cloudflare challenge on first page only
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    if "momento" not in driver.title.lower() and "moment" not in driver.title.lower():
+                        break
+                    time.sleep(1)
+                time.sleep(4)  # concept badges are JS-rendered
+            else:
+                time.sleep(3)  # CF already cleared; just wait for JS render
+
+            html = driver.page_source
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Total results count — only parse once
+            if page_num == 0:
+                m_total = re.search(r"(\d+)\s+results?", soup.get_text(" ", strip=True))
+                total = int(m_total.group(1)) if m_total else 0
+                print(f"  [faculty-up] {total} total results, fetching up to {max_results}")
+
+            page_results = _parse_faculty_up_page(soup, seen, max_results - len(results))
+            results.extend(page_results)
+
+            # Stop if no new results (last page) or next page link absent
+            if not page_results or not soup.find("a", class_="step", string=str(page_num + 2)):
+                break
+            page_num += 1
+
+    except Exception as exc:
+        print(f"  [faculty-up] Browser error: {exc}")
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    # Enrich abstracts: S2 API if DOI available, individual page fetch otherwise
+    if fetch_abstracts:
+        for r in results:
+            if r["doi"]:
+                r["abstract"] = _faculty_up_abstract_from_doi(r["doi"])
+            else:
+                r["abstract"] = _faculty_up_abstract_from_page(r["url"])
+
+    print(f"  [faculty-up] Found {len(results)} papers")
+    return results
+
+
+def _search_openalex_seed_papers(
+    topic: str,
+    max_results: int = 10,
+    filter_oa: bool = False,
+) -> list[dict]:
+    """Search OpenAlex for seed paper candidates.
+
+    Uses economics concept filter when topic looks econ-related to reduce noise.
+    Returns pipeline-compatible dicts (same shape as _search_semantic_scholar_seed_papers).
+    """
+    try:
+        from ..paper_searcher import _search_openalex, OPENALEX_CONCEPTS
+    except ImportError:
+        return []
+
+    # Narrow to economics when topic signals it — reduces noise vs. bare text search
+    _ECON_SIGNALS = [
+        "wage", "employment", "gdp", "inflation", "income", "poverty", "inequality",
+        "labor", "labour", "trade", "tax", "fiscal", "monetary", "growth", "impact",
+        "causal", "difference in differences", "did ", "regression discontinuity",
+        "instrumental variable", "iv ", "rct", "randomized", "experiment",
+        "peru", "perú", "latin america", "developing", "economía", "economia",
+    ]
+    topic_lower = topic.lower()
+    use_concept = any(sig in topic_lower for sig in _ECON_SIGNALS)
+    concept_ids = [OPENALEX_CONCEPTS["economics"]] if use_concept else None
+
+    papers = _search_openalex(
+        topic,
+        max_results=max_results,
+        filter_oa=filter_oa,
+        concept_ids=concept_ids,
+    )
+
+    results = []
+    for p in papers:
+        results.append({
+            "title": p.title,
+            "authors": p.authors,
+            "year": p.year,
+            "venue": p.venue,
+            "citationCount": p.citation_count,
+            "abstract": p.abstract,
+            "url": p.url,
+            "openAccessPdf": {"url": p.open_access_pdf} if p.open_access_pdf else {},
+            "externalIds": p.external_ids,
+            "source": "openalex",
+            "doi": p.doi,
+        })
+    return results
+
+
+def _search_bcrp_research(
+    topic: str,
+    max_results: int = 10,
+    pub_types: list[str] | None = None,
+    fetch_abstracts: bool = True,
+    fetch_abstracts_top_n: int = 5,
+) -> list[dict]:
+    """Search BCRP research portal (investigacion.bcrp.gob.pe).
+
+    Covers Working Papers, Revista Estudios Económicos, and Revista Moneda.
+    Server-side rendered — plain requests, no JS required.
+
+    Parameters
+    ----------
+    pub_types : list[str] | None
+        Filter by publication type. Values: "working_paper", "estudios_economicos",
+        "revista_moneda". None = all types.
+    fetch_abstracts : bool
+        If True, fetch individual paper pages for abstract + PDF URL (top N only).
+    fetch_abstracts_top_n : int
+        How many papers to enrich with abstract + PDF.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    _TYPE_MAP = {
+        "working papers": "working_paper",
+        "documentos de trabajo": "working_paper",
+        "revista estudios económicos": "estudios_economicos",
+        "revista estudios economicos": "estudios_economicos",
+        "revista moneda": "revista_moneda",
+        "moneda": "revista_moneda",
+    }
+
+    print(f"  [bcrp-research] Searching '{topic[:60]}'...")
+    try:
+        r = requests.get(
+            "https://investigacion.bcrp.gob.pe/en/publications/buscador",
+            params={"inavbar_buscar": topic, "sortBy": "newest"},
+            timeout=20,
+            allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (academic research pipeline)"},
+        )
+        r.raise_for_status()
+    except Exception as exc:
+        print(f"  [bcrp-research] Request failed: {exc}")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    cards = soup.find_all("article", attrs={"data-date": True})
+
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    for card in cards:
+        if len(results) >= max_results * 2:
+            break
+
+        # Publication type
+        meta = card.find("div", class_="meta")
+        if not meta:
+            continue
+        meta_text = meta.get_text(" ", strip=True).lower()
+        raw_type = ""
+        for k in _TYPE_MAP:
+            if k in meta_text:
+                raw_type = _TYPE_MAP[k]
+                break
+
+        if pub_types and raw_type not in pub_types:
+            continue
+
+        # Title + URL
+        h3 = card.find("h3", class_="title")
+        if not h3:
+            continue
+        a_tag = h3.find("a")
+        if not a_tag:
+            continue
+        title = a_tag.get_text(strip=True)
+        url = a_tag.get("href", "")
+        if not title or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+
+        # Authors
+        authors_p = card.find("p", class_="authors")
+        authors_str = ""
+        if authors_p:
+            parts = [t.get_text(strip=True).rstrip(";") for t in authors_p.find_all(["a", "span"]) if t.get_text(strip=True)]
+            authors_str = ", ".join(p for p in parts if p)
+
+        # Date / year from data-date attr
+        date_str = card.get("data-date", "")
+        year = None
+        if date_str:
+            try:
+                year = int(date_str[:4])
+            except ValueError:
+                pass
+
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": year,
+            "venue": "BCRP " + (raw_type.replace("_", " ").title() if raw_type else "Research"),
+            "citationCount": 0,
+            "abstract": "",
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {},
+            "source": "bcrp_research",
+            "doi": "",
+            "_pub_type": raw_type,
+        })
+
+    # Enrich top N with abstract + PDF URL
+    if fetch_abstracts and results:
+        to_enrich = [r for r in results if not r["abstract"]][:fetch_abstracts_top_n]
+        for item in to_enrich:
+            try:
+                pr = requests.get(
+                    item["url"], timeout=15, allow_redirects=True,
+                    headers={"User-Agent": "Mozilla/5.0 (academic research pipeline)"},
+                )
+                pr.raise_for_status()
+                ps = BeautifulSoup(pr.text, "html.parser")
+
+                # Abstract — look for section with "resumen" or "abstract" heading
+                abstract = ""
+                for heading in ps.find_all(["h2", "h3", "h4"]):
+                    htext = heading.get_text(strip=True).lower()
+                    if "resumen" in htext or "abstract" in htext:
+                        sibling = heading.find_next_sibling()
+                        if sibling:
+                            abstract = sibling.get_text(" ", strip=True)[:1500]
+                        break
+                item["abstract"] = abstract
+
+                # PDF URL — look for bcrp.gob.pe/docs link
+                for a in ps.find_all("a", href=True):
+                    href = a["href"]
+                    if "bcrp.gob.pe/docs" in href and href.endswith(".pdf"):
+                        item["openAccessPdf"] = {"url": href}
+                        break
+            except Exception:
+                pass
+
+    # Trim to max_results
+    results = results[:max_results]
+    print(f"  [bcrp-research] Found {len(results)} papers")
+    return results
+
+
+def _resolve_paperdl_mode(state: dict | None = None) -> str:
+    """Resolve paperdl mode: state config → config.py → env → 'auto'."""
+    if state:
+        mode = state.get("config", {}).get("paperdl", "")
+        if mode in ("auto", "on", "off"):
+            return mode
+    try:
+        from ..paper_searcher import _resolve_paperdl_mode as _rm
+        return _rm()
+    except ImportError:
+        import os
+        return os.environ.get("PIPELINE_PAPERDL", "auto")
+
+
 def _candidate_to_seed_paper(candidate: dict) -> dict | None:
     """Convert a dataset/replication-package candidate into a paper-like record."""
     source = (candidate.get("source_api") or "").lower()
@@ -262,6 +825,42 @@ def _dedupe_seed_papers(papers: list[dict]) -> list[dict]:
         seen.add(key)
         deduped.append(p)
     return deduped
+
+
+def _search_paperdl_seed_papers(topic: str, max_results: int = 10,
+                                mode: str = "auto") -> list[dict]:
+    """Search paperdl (arXiv, OpenReview, PMLR, PMC) for seed papers.
+
+    Respects paperdl mode: "auto" (use if installed), "on" (require), "off" (skip).
+    Falls back gracefully if paperdl unavailable and mode is "auto".
+    """
+    if mode == "off":
+        return []
+
+    try:
+        from ..paper_searcher import PaperSearcher, is_paperdl_available
+    except ImportError:
+        return []
+
+    if not is_paperdl_available():
+        if mode == "on":
+            print("  [paperdl] Mode is 'on' but paperdl not installed. "
+                  "Install with: pip install paperdl")
+        return []
+
+    print(f"  [paperdl] Searching seed papers for '{topic}'...")
+    try:
+        econ_sources = ["arxiv", "pmc"]  # PMLR removed — ML proceedings, 0 econ results, 15min per search
+        searcher = PaperSearcher(sources=econ_sources, mode=mode)
+        results = searcher.search(topic, max_results=max_results)
+        papers = []
+        for pi in results:
+            papers.append(pi.to_pipeline_dict())
+        print(f"  [paperdl] Found {len(papers)} seed papers")
+        return papers
+    except Exception as e:
+        print(f"  [paperdl] Error: {e}")
+        return []
 
 
 def _search_dbnomics(topic: str, max_results: int = 5) -> list[dict]:
@@ -347,10 +946,15 @@ def _search_ckan(api_root: str, portal_label: str, topic: str,
     if use_format_filter:
         params["fq"] = "res_format:(CSV OR TSV OR JSON OR XLSX OR ZIP)"
 
+    _CKAN_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; DatosAbiertos-Lab/1.0)",
+        "Accept": "application/json",
+    }
     try:
         r = requests.get(
             f"{api_root.rstrip('/')}/api/3/action/package_search",
             params=params,
+            headers=_CKAN_HEADERS,
             timeout=20,
         )
         r.raise_for_status()
@@ -406,22 +1010,10 @@ def _search_ckan(api_root: str, portal_label: str, topic: str,
 
 
 def _search_datagov(topic: str, max_results: int = 5) -> list[dict]:
-    """Search US data.gov (CKAN) for datasets with directly-downloadable files.
-
-    Uses CKAN's `res_format` facet filter (via _search_ckan helper) to require
-    at least one resource in a parseable format. This is far more reliable
-    than filtering by organization, because data.gov indexes many federal/
-    state/municipal portals where most "datasets" are actually HTML landing
-    pages. Downstream Q1-Q8 quality filters reject low-quality files so this
-    function does NOT need to gate on causal structure.
-    """
-    return _search_ckan(
-        api_root="https://catalog.data.gov",
-        portal_label="data.gov",
-        topic=topic,
-        max_results=max_results,
-        source_api="datagov",
-    )
+    """Search US data.gov — DISABLED: CKAN API dead at catalog.data.gov (404 2026-06-20)."""
+    # catalog.data.gov/api/3/action/package_search returns 404 — API retired
+    # TODO: find replacement endpoint (data.gov may have migrated to a new API)
+    return []
 
 
 def _search_worldbank(topic: str, max_results: int = 5) -> list[dict]:
@@ -516,7 +1108,7 @@ def _search_eu_opendata(topic: str, max_results: int = 5) -> list[dict]:
     try:
         r = requests.get(
             "https://data.europa.eu/api/hub/search/search",
-            params={"q": topic, "limit": max_results},
+            params={"query": topic, "limit": max_results},  # param is 'query' not 'q'
             timeout=20,
         )
         r.raise_for_status()
@@ -618,32 +1210,116 @@ def _search_open_canada(topic: str, max_results: int = 5) -> list[dict]:
 
 
 def _search_datos_gob_mx(topic: str, max_results: int = 5) -> list[dict]:
-    """México federal open data portal (datos.gob.mx) — CKAN.
-
-    Spanish-language portal — for best results pass Spanish keywords.
-    Format facet filter is disabled because the install behaves erratically
-    when it's enabled; the post-walk filter still extracts download_url.
-    """
-    return _search_ckan(
-        api_root="https://datos.gob.mx",
-        portal_label="datos.gob.mx",
-        topic=topic,
-        max_results=max_results,
-        use_format_filter=False,
-        source_api="datos_gob_mx",
-        dataset_url_template="https://datos.gob.mx/busca/dataset/{name}",
-    )
+    """México federal open data portal — DISABLED: SSLError on datos.gob.mx (2026-06-20)."""
+    # SSL certificate error on datos.gob.mx — package_search also returns 404
+    # TODO: verify if cert is fixed; add verify=False once confirmed safe
+    return []
 
 
 def _search_datosabiertos_peru(topic: str, max_results: int = 5) -> list[dict]:
-    """Peru federal open data portal (datosabiertos.gob.pe) - CKAN."""
-    return _search_ckan(
-        api_root="https://www.datosabiertos.gob.pe",
-        portal_label="datosabiertos.gob.pe",
-        topic=topic,
-        max_results=max_results,
-        source_api="datosabiertos_peru",
-    )
+    """Peru open data portal (datosabiertos.gob.pe) - CKAN/DKAN.
+
+    This portal blocks package_search (returns 418) and requires a browser-like
+    User-Agent. Strategy: try package_search first; if blocked, fall back to
+    package_list + token filter (as per LAB11/DatosAbiertos reference implementation).
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    BASE = "https://www.datosabiertos.gob.pe/api/3/action"
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; DatosAbiertos-Lab/1.0)",
+        "Accept": "application/json",
+    }
+    label = "datosabiertos.gob.pe"
+    print(f"  [{label}] Searching for '{topic}'...")
+
+    def _pkg_to_result(pkg: dict) -> dict:
+        resources = pkg.get("resources") or []
+        download_url = ""
+        download_format = ""
+        _DL_EXTS = (".csv", ".tsv", ".dta", ".xlsx", ".zip", ".json")
+        _DL_FMTS = {"csv", "tsv", "dta", "xlsx", "zip", "json"}
+        for res in resources:
+            fmt = (res.get("format") or "").lower()
+            ru = res.get("url") or ""
+            if ru and (ru.lower().endswith(_DL_EXTS) or fmt in _DL_FMTS):
+                download_url = ru
+                download_format = fmt
+                break
+        name_slug = pkg.get("name", "")
+        org = pkg.get("organization") or {}
+        org_name = org.get("title") or org.get("name") or label if isinstance(org, dict) else label
+        return {
+            "name": (pkg.get("title") or name_slug)[:200],
+            "provider": f"{label} ({org_name})" if org_name != label else label,
+            "url": f"https://www.datosabiertos.gob.pe/dataset/{name_slug}",
+            "download_url": download_url,
+            "download_format": download_format,
+            "description": (pkg.get("notes") or "")[:300],
+            "published": (pkg.get("metadata_created") or "")[:10],
+            "source_api": "datosabiertos_peru",
+        }
+
+    # 1. Try package_search (works on standard CKAN; often blocked here)
+    try:
+        r = requests.get(
+            f"{BASE}/package_search",
+            params={"q": topic, "rows": max_results,
+                    "fq": "res_format:(CSV OR TSV OR JSON OR XLSX OR ZIP)"},
+            headers=HEADERS,
+            timeout=20,
+        )
+        if r.status_code == 200:
+            items = r.json().get("result", {}).get("results", [])
+            if items:
+                results = [_pkg_to_result(p) for p in items[:max_results]]
+                print(f"  [{label}] {len(results)} datasets (package_search)")
+                return results
+    except Exception:
+        pass
+
+    # 2. Fallback: package_list + token filter (LAB11 pattern)
+    try:
+        r = requests.get(f"{BASE}/package_list", headers=HEADERS, timeout=20)
+        r.raise_for_status()
+        text = r.content.decode("utf-8-sig").strip()
+        if not text.startswith("{"):
+            print(f"  [{label}] Non-JSON from package_list")
+            return []
+        names: list[str] = r.json().get("result") or []
+        tokens = [t for t in topic.lower().split() if len(t) > 2]
+        matched = [
+            n for n in names
+            if any(t in n.lower() for t in tokens)
+        ][:max_results * 3]  # fetch extra, trim after show
+
+        results = []
+        for name in matched:
+            if len(results) >= max_results:
+                break
+            try:
+                rs = requests.get(f"{BASE}/package_show", params={"id": name},
+                                  headers=HEADERS, timeout=15)
+                if rs.status_code != 200:
+                    continue
+                data = rs.json()
+                if not data.get("success"):
+                    continue
+                raw = data.get("result")
+                pkg = raw[0] if isinstance(raw, list) and raw else raw if isinstance(raw, dict) else None
+                if pkg:
+                    results.append(_pkg_to_result(pkg))
+            except Exception:
+                continue
+
+        print(f"  [{label}] {len(results)} datasets (package_list fallback, {len(names)} total packages)")
+        return results
+    except Exception as e:
+        print(f"  [{label}] Error: {e}")
+        return []
 
 
 def _search_govdata_de(topic: str, max_results: int = 5) -> list[dict]:
@@ -1392,17 +2068,126 @@ def _generate_data_summary(df) -> str:
     return "\n".join(lines)
 
 
+def _profile_directory(data_path: str) -> dict:
+    """Profile a folder of datasets instead of a single file.
+
+    Detects main data files, reads README if present, profiles the most
+    important file. Returns same dict shape as _profile_dataset plus
+    extra key 'folder_context' with human-readable folder description.
+    """
+    import pandas as pd
+
+    p = Path(data_path)
+    DATA_EXTS = {".dta", ".csv", ".xlsx", ".xls", ".parquet", ".tab", ".tsv", ".json"}
+
+    # ── 1. Collect all data files ──────────────────────────────────────────
+    all_files: list[Path] = []
+    for ext in DATA_EXTS:
+        all_files.extend(p.rglob(f"*{ext}"))
+    all_files.sort(key=lambda f: f.stat().st_size, reverse=True)
+
+    if not all_files:
+        print(f"  [data-dir] No data files found in {data_path}")
+        sys.exit(1)
+
+    print(f"  [data-dir] Found {len(all_files)} data file(s) in folder")
+
+    # ── 2. Heuristic: pick main file ───────────────────────────────────────
+    MAIN_KEYWORDS = ("final", "main", "analysis", "master", "base", "panel")
+    MAIN_FOLDERS  = ("finales", "final", "clean", "processed", "analysis")
+
+    def _score(f: Path) -> int:
+        score = 0
+        if any(k in f.stem.lower() for k in MAIN_KEYWORDS):
+            score += 10
+        if any(k in f.parts[-2].lower() for k in MAIN_FOLDERS):
+            score += 8
+        if f.suffix == ".dta":
+            score += 3
+        score += min(5, f.stat().st_size // (1024 * 1024))  # MB bonus, cap 5
+        return score
+
+    scored = sorted(all_files, key=_score, reverse=True)
+    main_file = scored[0]
+    print(f"  [data-dir] Primary file selected: {main_file.relative_to(p)}")
+
+    # ── 3. Read README ─────────────────────────────────────────────────────
+    readme_text = ""
+    for readme_name in ("README.txt", "readme.txt", "README.md", "readme.md"):
+        readme_path = p / readme_name
+        if readme_path.exists():
+            try:
+                readme_text = readme_path.read_text(encoding="utf-8", errors="replace")[:3000]
+                print(f"  [data-dir] README found: {readme_name}")
+                break
+            except Exception:
+                pass
+
+    # ── 4. Build folder manifest ───────────────────────────────────────────
+    manifest_lines = []
+    for f in all_files[:30]:
+        rel = f.relative_to(p)
+        size_kb = f.stat().st_size / 1024
+        marker = " ← [PRIMARY]" if f == main_file else ""
+        manifest_lines.append(f"  {rel}  ({size_kb:.0f} KB){marker}")
+    manifest = "\n".join(manifest_lines)
+    if len(all_files) > 30:
+        manifest += f"\n  ... and {len(all_files) - 30} more files"
+
+    folder_context = (
+        f"FOLDER INPUT — {len(all_files)} data file(s) detected.\n"
+        f"Folder: {p.name}\n\n"
+        f"Files:\n{manifest}\n"
+    )
+    if readme_text:
+        folder_context += f"\nREADME:\n{readme_text}\n"
+
+    # ── 5. Profile main file ───────────────────────────────────────────────
+    df = _load_dataframe(str(main_file))
+    rows, cols = df.shape
+    missing = df.isnull().mean().to_dict()
+    structure_info = _detect_id_and_time_columns(df)
+    data_summary = _generate_data_summary(df)
+
+    print(f"  [data-dir] Primary file: {rows} rows x {cols} cols "
+          f"({structure_info['structure']})")
+
+    profile = {
+        "rows": rows,
+        "cols": cols,
+        "columns": list(df.columns),
+        "dtypes": {c: str(df[c].dtype) for c in df.columns},
+        "missing_pct": {c: round(v * 100, 1) for c, v in missing.items()},
+        "structure": structure_info["structure"],
+        "panel_flag": structure_info["structure"] in ("panel", "wide-panel"),
+        "panel_details": structure_info["panel_details"],
+        "id_cols": structure_info["id_cols"],
+        "time_cols": structure_info["time_cols"],
+        "wide_panel": structure_info.get("wide_panel"),
+        "data_summary": data_summary,
+        "sample_rows": df.head(5).to_string(),
+        "folder_context": folder_context,
+        "all_files": [str(f.relative_to(p)) for f in all_files],
+        "primary_file": str(main_file.relative_to(p)),
+    }
+    return profile
+
+
 def _profile_dataset(data_path: str) -> dict:
     """Run deep profiling on the user's dataset.
 
     Returns keys: rows, cols, columns, dtypes, missing_pct, structure,
     panel_details, data_summary, sample_rows.
+    Accepts a single file OR a directory (auto-detects main file).
     """
     try:
         import pandas as pd
     except ImportError:
         print("  [error] pandas is required for Path B. Run: pip install pandas")
         sys.exit(1)
+
+    if Path(data_path).is_dir():
+        return _profile_directory(data_path)
 
     df = _load_dataframe(data_path)
     rows, cols = df.shape
@@ -1587,7 +2372,236 @@ def _causal_design_warning(profile: dict) -> None:
 
 # ── Path C: data-first discovery ──────────────────────────────────────────────
 
-def _run_path_c(project_dir: Path, state: dict) -> dict:
+def _write_path_c_result(
+    project_dir: Path,
+    state: dict,
+    *,
+    selected_topic: str,
+    selected: dict,
+    qualified: list[dict],
+    topic_list: list[dict],
+    smoke: bool = False,
+) -> dict:
+    """Persist Path C output in the same shape used by downstream stages."""
+    profile = selected["profile"]
+    feasibility = selected["feasibility"]
+
+    state["stages"]["stage1"] = {
+        "status": "completed",
+        "topic": selected_topic,
+        "path": "C",
+        "output_file": str(project_dir / "stage1_discovery.md"),
+        "completed_at": datetime.now().isoformat(),
+        "data_path": selected["local_path"],
+        "data_profile": {
+            "rows": profile["rows"],
+            "cols": profile["cols"],
+            "columns": profile["columns"],
+            "structure": profile["structure"],
+            "panel_flag": profile["panel_flag"],
+            "panel_details": profile.get("panel_details", {}),
+            "id_cols": profile.get("id_cols", []),
+            "time_cols": profile.get("time_cols", []),
+            "wide_panel": profile.get("wide_panel"),
+        },
+        "recommended_data_sources": [q["candidate"] for q in qualified],
+    }
+    if smoke:
+        state["stages"]["stage1"]["smoke"] = True
+
+    state["stages"]["stage1_5"] = {
+        "status": "completed",
+        "completed_at": datetime.now().isoformat(),
+        "n_downloaded": len(qualified),
+        "n_not_downloaded": 0,
+        "feasibility": feasibility,
+        "downloaded_datasets": [
+            {
+                "name": q["candidate"].get("name", ""),
+                "local_path": q["local_path"],
+                "warnings": q["warnings"],
+                "profile": {
+                    "rows": q["profile"]["rows"],
+                    "cols": q["profile"]["cols"],
+                    "columns": q["profile"]["columns"],
+                    "structure": q["profile"]["structure"],
+                    "panel_flag": q["profile"]["panel_flag"],
+                    "panel_details": q["profile"].get("panel_details", {}),
+                    "id_cols": q["profile"].get("id_cols", []),
+                    "time_cols": q["profile"].get("time_cols", []),
+                    "wide_panel": q["profile"].get("wide_panel"),
+                    "data_summary": q["profile"].get("data_summary", ""),
+                },
+            }
+            for q in qualified
+        ],
+    }
+    if smoke:
+        state["stages"]["stage1_5"]["smoke"] = True
+
+    output_file = project_dir / "stage1_discovery.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(
+        json.dumps({
+            "path": "C",
+            "smoke": smoke,
+            "topic": selected_topic,
+            "qualified_datasets": len(qualified),
+            "selected_dataset": selected["candidate"].get("name", ""),
+            "selected_data_path": selected["local_path"],
+            "feasibility": feasibility,
+            "suggestions": topic_list,
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    state["current_stage"] = 1
+    save_state(project_dir, state)
+
+    print(f"\n  {'=' * 60}")
+    print(f"  STAGE 1 PATH C {'SMOKE ' if smoke else ''}- COMPLETE")
+    print(f"  {'=' * 60}")
+    print(f"  Topic:     {selected_topic}")
+    print(f"  Dataset:   {Path(selected['local_path']).name}")
+    print(f"  Rows:      {profile['rows']:,}")
+    print(f"  Columns:   {profile['cols']}")
+    print(f"  Structure: {profile['structure']}")
+    print(f"  Ceiling:   {feasibility['score_ceiling']}/100")
+    print(f"  Tier:      {feasibility['max_tier']} ({feasibility['tier_label']})")
+    print(f"  {'=' * 60}")
+
+    return state
+
+
+def _create_path_c_smoke_microdata(project_dir: Path) -> Path:
+    """Create a deterministic panel microdataset for Path C smoke tests."""
+    import pandas as pd
+
+    data_dir = project_dir / "data" / "external"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    out = data_dir / "path_c_smoke_microdata.csv"
+
+    rows = []
+    years = list(range(2013, 2023))
+    for student_id in range(1, 121):
+        district_id = (student_id - 1) % 60 + 1
+        female = student_id % 2
+        baseline_score = 480 + (student_id % 35) * 3 + (district_id % 7)
+        adoption_year = 2017 + (district_id % 4) if district_id <= 48 else 0
+        ever_treated = int(adoption_year > 0)
+        for year in years:
+            post = int(adoption_year > 0 and year >= adoption_year)
+            years_since = max(0, year - adoption_year + 1) if post else 0
+            age = 8 + (year - 2013)
+            attendance = 84 + (student_id % 9) + (year - 2013) * 0.35 + post * 2.2
+            math_score = (
+                baseline_score
+                + (year - 2013) * 4.0
+                + post * 8.5
+                + years_since * 1.3
+                + female * 1.5
+                + (district_id % 5)
+            )
+            reading_score = (
+                baseline_score
+                + 12
+                + (year - 2013) * 3.4
+                + post * 6.2
+                + years_since * 0.9
+                + female * 2.0
+            )
+            rows.append({
+                "student_id": student_id,
+                "district_id": district_id,
+                "school_id": district_id * 10 + (student_id % 5),
+                "year": year,
+                "adoption_year": adoption_year,
+                "ever_treated": ever_treated,
+                "treatment": post,
+                "post": post,
+                "years_since_treatment": years_since,
+                "math_score": round(math_score, 2),
+                "reading_score": round(reading_score, 2),
+                "attendance_rate": round(attendance, 2),
+                "baseline_score": baseline_score,
+                "age": age,
+                "female": female,
+                "rural": int(district_id % 3 == 0),
+            })
+
+    pd.DataFrame(rows).to_csv(out, index=False, encoding="utf-8")
+    return out
+
+
+def _run_path_c_smoke(project_dir: Path, state: dict) -> dict:
+    """Run Path C end-to-end locally without network, Claude, or user input."""
+    from .stage1_5_data_loading import (
+        _profile_dataset, _early_warning, _assess_feasibility,
+    )
+
+    print(f"\n{'=' * 60}")
+    print("STAGE 1: Discovery - Path C smoke")
+    print("=" * 60)
+    print("  Using deterministic local microdata; external APIs and Claude are skipped.")
+
+    local_path = _create_path_c_smoke_microdata(project_dir)
+    candidate = {
+        "name": "Path C smoke panel microdata",
+        "provider": "local smoke fixture",
+        "url": str(local_path),
+        "description": "Synthetic student-year panel with staggered treatment adoption.",
+        "method": "staggered DiD / event study",
+        "area": "education",
+        "design_tier": 1,
+    }
+
+    profile = _profile_dataset(str(local_path))
+    warnings = _early_warning(profile)
+    feasibility = _assess_feasibility(
+        [{"profile": profile, "dataset": candidate, "local_path": str(local_path), "warnings": warnings}],
+        [],
+    )
+    feasibility["score_ceiling"] = max(feasibility["score_ceiling"], 90)
+    feasibility["max_tier"] = min(feasibility["max_tier"], 1)
+    feasibility["tier_label"] = "CAUSAL (smoke fixture: staggered treatment panel)"
+
+    qualified = [{
+        "candidate": candidate,
+        "local_path": str(local_path),
+        "profile": profile,
+        "feasibility": feasibility,
+        "warnings": warnings,
+    }]
+    topic_list = [{
+        "dataset_index": 1,
+        "topic": "Staggered school program effects on learning",
+        "research_question": (
+            "Do staggered school program rollouts raise math and reading scores?"
+        ),
+        "method": "staggered DiD with event-study dynamics",
+        "identification_level": "A",
+        "identification": (
+            "Districts adopt in different years, so not-yet-treated districts serve as controls."
+        ),
+        "control_group": "Districts that adopt later or never adopt within the panel.",
+        "score_potential": "Level A identification + 10-year panel + 60 districts = 90+ potential",
+    }]
+
+    print(f"  [ok] Profiled {profile['rows']:,} rows x {profile['cols']} cols")
+    print(f"  [ok] Structure: {profile['structure']} | ceiling: {feasibility['score_ceiling']}/100")
+
+    return _write_path_c_result(
+        project_dir,
+        state,
+        selected_topic=topic_list[0]["topic"],
+        selected=qualified[0],
+        qualified=qualified,
+        topic_list=topic_list,
+        smoke=True,
+    )
+
+
+def _run_path_c(project_dir: Path, state: dict, smoke: bool = False) -> dict:
     """Path C: Search for high-quality datasets first, then suggest topics.
 
     1. Search APIs with broad queries for panel/causal datasets
@@ -1596,6 +2610,9 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
     4. For qualifying datasets, ask Claude to suggest research topics
     5. User picks dataset + topic
     """
+    if smoke:
+        return _run_path_c_smoke(project_dir, state)
+
     from concurrent.futures import ThreadPoolExecutor
     from .stage1_5_data_loading import (
         _profile_dataset, _early_warning, _assess_feasibility,
@@ -1723,8 +2740,53 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
     # FAOSTAT bulk catalog (agriculture / food / environment country panels)
     portal_results.extend(_search_faostat(random.choice(fao_queries), max_results=3))
 
+    # ── Phase 1d: Peru-specific sources ──────────────────────────────────
+    # INEI, BCRP, datosabiertos, MINEM, MEF all expose direct download URLs
+    # that Path C can profile immediately. Use broad Peru queries — topic
+    # matching happens later in Stage 2, not here.
+    print(f"\n  [search] Phase 1d: Searching Peru-specific sources...")
+    peru_results: list[dict] = []
+    _peru_queries = ["empleo ingresos hogares", "educacion salud Peru", "produccion mineria Peru"]
+    _pq = random.choice(_peru_queries)
+    # INEI, datosabiertos, MINEM, MEF, INGEMMET — use broad query
+    for _fn, _kw in [
+        (_search_inei,                   {"max_results": 8}),
+        (_search_datosabiertos_curated,  {"max_results": 8}),
+        (_search_datosabiertos_peru,     {"max_results": 5}),
+        (_search_minem,                  {"max_results": 2}),
+        (_search_mef_consulta_amigable,  {"max_results": 3}),
+        (_search_ingemmet,               {"max_results": 2}),
+    ]:
+        try:
+            peru_results.extend(_fn(_pq, **_kw))
+        except Exception:
+            pass
+    # BCRP macro panel — always include regardless of query (it's always useful)
+    try:
+        peru_results.extend(_search_bcrp("PBI inflacion tipo cambio", max_results=1))
+    except Exception:
+        pass
+    # BCRP research papers and ALICIA — academic Peru sources
+    for _fn, _kw in [
+        (_search_bcrp_research,          {"max_results": 3}),
+        (_search_alicia,                 {"max_results": 3}),
+    ]:
+        try:
+            peru_results.extend(_fn(_pq, **_kw))
+        except Exception:
+            pass
+
+    # Split Peru results: those with download_url go to portal_results (direct download),
+    # INEI/BCRP without download_url go to peru_inei_pool (need specialized downloaders)
+    peru_inei_pool = [r for r in peru_results if not r.get("download_url") and
+                      r.get("source_api") in ("inei", "bcrp")]
+    peru_dl = [r for r in peru_results if r.get("download_url")]
+    print(f"  [search] Peru sources: {len(peru_dl)} direct-dl + {len(peru_inei_pool)} INEI/BCRP "
+          f"({len(peru_results)} total)")
+    portal_results.extend(peru_results)
+
     # Keep only candidates that actually expose a downloadable file —
-    # Path C cannot profile metadata-only entries.
+    # Path C cannot profile metadata-only entries. INEI handled separately below.
     downloadable_portal = [r for r in portal_results if r.get("download_url")]
 
     # Filter out already-used and dedupe by download URL
@@ -1783,6 +2845,22 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
             "provider": pr.get("provider", "Open Data Portal"),
         })
 
+    # Phase 1d: add INEI/BCRP pool — no download_url but have specialized downloaders
+    for pr in peru_inei_pool:
+        CURATED_PACKAGES.append({
+            "title": pr.get("name", "")[:70],
+            "dataverse_doi": "",
+            "url": pr.get("url", ""),
+            "method": "panel survey",
+            "area": "peru microdata",
+            "design_tier": 2,  # ENAHO panel = Tier 2 (natural experiments feasible)
+            "provider": pr.get("provider", "INEI Peru"),
+            "source_api": pr.get("source_api", "inei"),
+            # Carry INEI-specific fields so download loop uses correct handler
+            "survey": pr.get("survey", ""),
+            "year": pr.get("year", ""),
+        })
+
     # Sort by tier
     packages = sorted(CURATED_PACKAGES, key=lambda x: x.get("design_tier", 9))
 
@@ -1813,6 +2891,10 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
             "description": paper.get("data_description", ""),
             "method": paper.get("method", ""),
             "area": paper.get("area", ""),
+            # Pass through Peru-specific fields for download loop routing
+            "source_api": paper.get("source_api", ""),
+            "survey": paper.get("survey", ""),
+            "year": paper.get("year", ""),
         })
 
     # ── Fallback: also search APIs directly if curated list somehow empty
@@ -1858,6 +2940,9 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
         "data.gov.au", "open.canada.ca", "datos.gob.mx",
         "govdata.de", "dati.gov.it",
         "socrata", "faostat",
+        # Peru sources (Phase 1d) — get reserved slots like portals
+        "inei", "bcrp", "datosabiertos", "minem", "mef", "ingemmet",
+        "alicia", "concytec", "bcrp research",
     )
     is_portal = lambda c: any(m in c.get("provider", "").lower() for m in portal_provider_marks)
 
@@ -1904,10 +2989,18 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
 
         # Try to download
         local_path = None
+        src_api = candidate.get("source_api", "")
         if "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
             local_path = _try_download_dataverse(url, data_dir)
         elif "zenodo" in provider or "zenodo.org" in url:
             local_path = _try_download_zenodo(url, data_dir)
+        elif src_api == "inei" or "inei" in provider:
+            # INEI microdata — use specialized INEI downloader
+            from .stage1_5_data_loading import _try_download_inei
+            local_path = _try_download_inei(candidate, data_dir)
+        elif src_api in ("datosabiertos_peru", "datosabiertos_curated") or "datosabiertos" in provider:
+            from .stage1_5_data_loading import _try_download_datosabiertos
+            local_path = _try_download_datosabiertos(candidate, data_dir)
         if not local_path:
             local_path = _try_download_direct(url, data_dir)
 
@@ -2174,7 +3267,17 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
         print(f"  You can provide a dataset path, or try Path A with a specific topic.\n")
         print("\a", end="", flush=True)
         while True:
-            choice = input("  Enter dataset path (or 'quit' to exit): ").strip().strip('"')
+            try:
+                choice = input("  Enter dataset path (or 'quit' to exit): ").strip().strip('"')
+            except EOFError:
+                print("  [stop] No interactive input available; stopping after failed data search.")
+                state["stages"]["stage1"] = {
+                    "status": "failed",
+                    "reason": "No datasets with score ceiling >= 85 found automatically.",
+                    "completed_at": datetime.now().isoformat(),
+                }
+                save_state(project_dir, state)
+                return state
             if choice.lower() == "quit":
                 import sys
                 sys.exit(0)
@@ -2333,7 +3436,11 @@ Return a JSON block:
     selected_dataset_idx = 0
 
     while True:
-        choice = input("\n  >> ").strip()
+        try:
+            choice = input("\n  >> ").strip()
+        except EOFError:
+            choice = "1" if topic_list else "quit"
+            print(f"\n  [auto] No interactive input available; choosing {choice}.")
         if choice.isdigit() and 1 <= int(choice) <= len(topic_list):
             sel = topic_list[int(choice) - 1]
             selected_topic = sel.get("topic", "research")
@@ -2352,6 +3459,20 @@ Return a JSON block:
     selected = qualified[min(selected_dataset_idx, len(qualified) - 1)]
     profile = selected["profile"]
     feasibility = selected["feasibility"]
+
+    print(f"\n  [papers] Searching seed papers for selected Path C topic...")
+    paperdl_mode = _resolve_paperdl_mode(state)
+    seed_papers = []
+    if selected_topic:
+        seed_papers.extend(_search_paperdl_seed_papers(selected_topic, max_results=8, mode=paperdl_mode))
+        seed_papers.extend(_search_semantic_scholar_seed_papers(selected_topic, max_results=8))
+        seed_papers.extend(_search_openalex_seed_papers(selected_topic, max_results=8))
+    for q in qualified:
+        p = _candidate_to_seed_paper(q["candidate"])
+        if p:
+            seed_papers.append(p)
+    seed_papers = _dedupe_seed_papers(seed_papers)
+    print(f"  [papers] Found {len(seed_papers)} seed papers")
 
     state["stages"]["stage1"] = {
         "status": "completed",
@@ -2372,6 +3493,7 @@ Return a JSON block:
             "wide_panel": profile.get("wide_panel"),
         },
         "recommended_data_sources": [q["candidate"] for q in qualified],
+        "seed_papers": seed_papers,
     }
 
     # Also save Stage 1.5 as completed (data already profiled)
@@ -2414,6 +3536,7 @@ Return a JSON block:
             "selected_dataset": selected["candidate"].get("name", ""),
             "feasibility": feasibility,
             "suggestions": topic_list,
+            "seed_papers": seed_papers,
         }, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -2460,6 +3583,22 @@ _PERU_KEYWORDS = {
     "lima", "arequipa", "cusco", "puno", "cajamarca", "microdata peru",
     "tambo", "tambos", "tambobook", "midis", "juntos", "pension 65",
     "ubigeo", "reniec", "sisfoh",
+    # Procurement / contracting
+    "seace", "osce", "oece", "contratacion", "contratación", "licitacion",
+    "licitación", "contrataciones", "ocds", "contrataciones abiertas",
+    # Telecom
+    "osiptel", "punku", "telecom", "telecomunicaciones",
+    # Geology / mining spatial data
+    "ingemmet", "geocatmin", "geologia", "geología", "geologico",
+    "geológico", "deposito mineral", "depósito mineral", "catastro minero",
+    "yacimiento",
+    # Fiscal / canon / transfers
+    "canon minero", "canon y sobrecanon", "regalias mineras", "regalías",
+    "mef", "consulta amigable", "transferencias", "sobrecanon",
+    "ingresos fiscales mineros",
+    # Competition / IP / consumer
+    "indecopi", "competencia", "antitrust", "propiedad intelectual",
+    "proteccion al consumidor", "protección al consumidor",
 }
 
 
@@ -2582,6 +3721,10 @@ def _search_inei(topic: str, max_results: int = 5) -> list[dict]:
 # only steer the candidate label/description. No extra package — requests only.
 #
 # Verified monthly series codes (see Skills_Claude/mcp_bcrp_server.py, LAB11).
+# NOTE: Fiscal/transfer series (02xxx range, e.g. PN02832AM canon minero) all
+# return HTTP 403 from the public API — BCRP restricts these to authenticated
+# users. For canon/transfer data, use MEF Consulta Amigable (manual) instead.
+# The 5 series below cover macro outcomes/controls; they are confirmed working.
 _BCRP_SERIES: dict[str, dict] = {
     "inflation":     {"code": "PN01271PM", "label": "Inflación IPC Lima (var% mensual)"},
     "exchange_rate": {"code": "PN01234PM", "label": "Tipo de cambio promedio (S/ por USD)"},
@@ -2649,11 +3792,35 @@ _DATOSABIERTOS_CURATED: list[dict] = [
         "encoding": "latin-1",
     },
     {
+        # LAB11 verified CKAN resource_id — more stable than direct file URL above
+        "name": "MINSA - IPRESS RENIPRESS (CKAN datastore, LAB11 verified)",
+        "keywords": ["salud", "health", "ipress", "establecimiento", "hospital",
+                     "minsa", "renipress", "clinica", "centro de salud", "medico"],
+        "download_url": (
+            "https://www.datosabiertos.gob.pe/api/3/action/datastore_search"
+            "?resource_id=7cf96151-5ddf-4281-90ba-b2b0407447ab&limit=500000"
+        ),
+        "encoding": "utf-8",
+        "ckan_resource_id": "7cf96151-5ddf-4281-90ba-b2b0407447ab",
+    },
+    {
         "name": "Alumnos matriculados 2016-2022 (MINEDU)",
         "keywords": ["educacion", "educación", "matricula", "matrícula", "alumno",
                      "estudiante", "escolar", "minedu", "colegio", "enrollment", "education", "school"],
         "download_url": "https://www.datosabiertos.gob.pe/sites/default/files/Matriculados_2016_al_2022.csv",
         "encoding": "utf-8",
+    },
+    {
+        # LAB11 verified CKAN resource_id for MINEDU matrícula
+        "name": "MINEDU - Matrícula escolar (CKAN datastore, LAB11 verified)",
+        "keywords": ["educacion", "educación", "matricula", "matrícula", "alumno",
+                     "estudiante", "escolar", "minedu", "colegio", "enrollment", "education", "school"],
+        "download_url": (
+            "https://www.datosabiertos.gob.pe/api/3/action/datastore_search"
+            "?resource_id=e276da3f-a009-4547-9e76-c814e14fc574&limit=500000"
+        ),
+        "encoding": "utf-8",
+        "ckan_resource_id": "e276da3f-a009-4547-9e76-c814e14fc574",
     },
 ]
 
@@ -2788,6 +3955,1090 @@ def _search_peru_replication_packages(topic: str, max_results: int = 5) -> list[
     return results
 
 
+# ── i4replication.org catalog ─────────────────────────────────────────────────
+#
+# SOURCE:  Institute for Replication (i4replication.org) — 293+ replicated papers
+# URL:     https://www.i4replication.org/papers
+# NOTES:   Static HTML page, no API. Scrape titles/authors, enrich via S2.
+#          All entries are published replications → has_public_data = True.
+#          Only activated when stage2_mode == "replicate".
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _search_i4replication(topic: str, max_results: int = 10) -> list[dict]:
+    """Scrape i4replication.org/papers for replication-verified papers matching topic.
+
+    Fetches the static HTML catalog, extracts titles/authors,
+    filters by topic relevance, then enriches via Semantic Scholar.
+    Returns up to max_results candidates with source="i4replication".
+    """
+    import re
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    catalog_url = "https://www.i4replication.org/papers"
+    print(f"  [i4replication] Fetching catalog: {catalog_url}")
+
+    try:
+        resp = requests.get(catalog_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        print(f"  [i4replication] Fetch failed: {e}")
+        return []
+
+    # ── Parse paper entries ────────────────────────────────────────────────
+    # i4replication.org uses <tr> rows or <div> cards — try both patterns
+    entries = []
+
+    # Pattern 1: table rows with paper title as link text
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL | re.IGNORECASE)
+    for row in rows:
+        # Strip tags
+        text = re.sub(r"<[^>]+>", " ", row)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > 20:
+            entries.append(text)
+
+    # Pattern 2: any <a> tag that looks like a paper title (>30 chars, no menu words)
+    if len(entries) < 10:
+        links = re.findall(r'<a[^>]*>([^<]{30,200})</a>', html)
+        skip = {"home", "papers", "about", "team", "contact", "donate", "blog",
+                "login", "signup", "register", "search", "filter", "sort"}
+        for link_text in links:
+            clean = re.sub(r"\s+", " ", link_text).strip()
+            if clean.lower() not in skip and len(clean) > 30:
+                entries.append(clean)
+
+    if not entries:
+        print("  [i4replication] Could not parse any entries from catalog page.")
+        return []
+
+    print(f"  [i4replication] Parsed {len(entries)} catalog entries")
+
+    # ── Filter by topic ────────────────────────────────────────────────────
+    topic_tokens = set(re.sub(r"[^a-z0-9 ]", "", topic.lower()).split())
+    topic_tokens.discard("")
+
+    scored = []
+    for entry in entries:
+        entry_lower = entry.lower()
+        hits = sum(1 for t in topic_tokens if t in entry_lower)
+        if hits > 0:
+            scored.append((hits, entry))
+
+    scored.sort(key=lambda x: -x[0])
+    top_entries = [e for _, e in scored[:max_results * 3]]
+
+    if not top_entries:
+        print(f"  [i4replication] No topic matches for '{topic}' in catalog.")
+        return []
+
+    print(f"  [i4replication] {len(top_entries)} topic-relevant entries — enriching via Semantic Scholar")
+
+    # ── Enrich via Semantic Scholar ────────────────────────────────────────
+    results = []
+    for entry in top_entries[:max_results * 2]:
+        # Use first 100 chars as query (titles extracted from HTML can be noisy)
+        query = entry[:100].strip()
+        try:
+            r = requests.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={
+                    "query": query,
+                    "limit": 1,
+                    "fields": "title,authors,year,venue,citationCount,abstract,url,openAccessPdf,externalIds",
+                },
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = r.json().get("data", [])
+            if not data:
+                continue
+            p = data[0]
+            title = (p.get("title") or "").strip()
+            if not title:
+                continue
+            authors = ", ".join(a.get("name", "") for a in (p.get("authors") or [])[:3])
+            if len(p.get("authors") or []) > 3:
+                authors += " et al."
+            results.append({
+                "title": title,
+                "authors": authors,
+                "year": p.get("year"),
+                "venue": p.get("venue", ""),
+                "citationCount": p.get("citationCount", 0),
+                "abstract": p.get("abstract") or "",
+                "url": p.get("url") or "",
+                "openAccessPdf": p.get("openAccessPdf") or {},
+                "externalIds": p.get("externalIds") or {},
+                "source": "i4replication",
+                "has_public_data": True,
+                "_data_public": True,
+                "_data_source_kw": "i4replication verified",
+            })
+            if len(results) >= max_results:
+                break
+        except Exception:
+            continue
+
+    print(f"  [i4replication] {len(results)} enriched candidates")
+    return results
+
+
+# ── OpenICPSR replication packages ───────────────────────────────────────────
+#
+# SOURCE:  openicpsr.org — AEA, NBER, and journal replication packages
+# API:     Dataverse-based instance; search via /openicpsr/api/search
+# NOTES:   Free, no auth required. Returns dataset-level metadata including
+#          DOI, description, and direct download links where available.
+#          Only activated when stage2_mode == "replicate".
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _search_openicpsr(topic: str, max_results: int = 8) -> list[dict]:
+    """Search OpenICPSR for replication packages matching topic.
+
+    OpenICPSR is a Dataverse instance hosting AEA and journal replication
+    packages. Returns candidates with source="openicpsr" and has_public_data=True.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [openicpsr] Searching replication packages for '{topic[:60]}'...")
+    try:
+        r = requests.get(
+            "https://www.openicpsr.org/openicpsr/api/search",
+            params={
+                "q": topic,
+                "type": "dataset",
+                "per_page": max_results,
+                "sort": "score",
+                "order": "desc",
+            },
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        print(f"  [openicpsr] Search failed: {exc}")
+        return []
+
+    items = data.get("data", {}).get("items", []) or []
+    if not items:
+        # Some Dataverse installs wrap differently
+        items = data.get("items", data.get("data", []))
+        if not isinstance(items, list):
+            items = []
+
+    results = []
+    for item in items[:max_results]:
+        name = item.get("name", "") or item.get("title", "") or ""
+        if not name:
+            continue
+        doi = item.get("global_id", "") or item.get("identifier", "") or ""
+        url = item.get("url", "") or (f"https://doi.org/{doi}" if doi else "")
+        description = item.get("description", "") or ""
+        authors_raw = item.get("authors", []) or []
+        if isinstance(authors_raw, list):
+            authors_str = ", ".join(
+                (a.get("name", a) if isinstance(a, dict) else str(a))
+                for a in authors_raw[:3]
+            )
+            if len(authors_raw) > 3:
+                authors_str += " et al."
+        else:
+            authors_str = str(authors_raw)
+
+        pub_date = item.get("published_at", "") or item.get("createdAt", "") or ""
+        year = pub_date[:4] if pub_date else None
+
+        results.append({
+            "title": name,
+            "authors": authors_str,
+            "year": year,
+            "venue": "OpenICPSR",
+            "citationCount": 0,
+            "abstract": description[:500],
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {"DOI": doi} if doi else {},
+            "source": "openicpsr",
+            "has_public_data": True,
+            "_data_public": True,
+            "_data_source_kw": "openicpsr replication package",
+        })
+
+    print(f"  [openicpsr] Found {len(results)} replication package(s)")
+    return results
+
+
+# ── ALICIA — Peru national open access repository ────────────────────────────
+#
+# SOURCE:  alicia.concytec.gob.pe — Acceso Libre a Información Científica
+# API:     VuFind REST API v1 at /vufind/api/v1/search
+# NOTES:   Free, no auth. Indexes Peruvian university and research papers.
+#          Enriched via Semantic Scholar for citation counts + abstracts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _search_alicia(topic: str, max_results: int = 8) -> list[dict]:
+    """Search ALICIA (CONCYTEC Peru) for Peruvian academic papers matching topic.
+
+    Uses VuFind REST API. Returns candidates with source="alicia".
+    Enriches found titles via Semantic Scholar for richer metadata.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [alicia] Searching Peruvian papers for '{topic[:60]}'...")
+    raw_titles: list[tuple[str, str, str]] = []  # (title, authors, url)
+
+    try:
+        r = requests.get(
+            "https://alicia.concytec.gob.pe/vufind/api/v1/search",
+            params={
+                "q": topic,
+                "type": "AllFields",
+                "limit": max_results,
+                "field[]": ["title", "author", "id", "urls", "publishDate"],
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+            verify=False,  # SSL cert expired on alicia.concytec.gob.pe
+        )
+        r.raise_for_status()
+        data = r.json()
+        for rec in data.get("records", []) or []:
+            title = rec.get("title", "") or ""
+            if not title:
+                continue
+            authors_list = rec.get("author", []) or []
+            if isinstance(authors_list, str):
+                authors_list = [authors_list]
+            authors_str = ", ".join(authors_list[:3])
+            if len(authors_list) > 3:
+                authors_str += " et al."
+            urls = rec.get("urls", []) or []
+            url = urls[0].get("url", "") if urls and isinstance(urls[0], dict) else (urls[0] if urls else "")
+            raw_titles.append((title, authors_str, url))
+    except Exception as exc:
+        print(f"  [alicia] API failed: {exc}")
+
+    if not raw_titles:
+        print(f"  [alicia] No results")
+        return []
+
+    print(f"  [alicia] {len(raw_titles)} raw hits — enriching via Semantic Scholar")
+
+    results = []
+    for title, authors_str, url in raw_titles[:max_results]:
+        try:
+            r2 = requests.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={
+                    "query": title,
+                    "limit": 1,
+                    "fields": "title,authors,year,venue,citationCount,abstract,url,openAccessPdf,externalIds",
+                },
+                timeout=15,
+            )
+            r2.raise_for_status()
+            hits = r2.json().get("data", []) or []
+            if hits:
+                p = hits[0]
+                oa = p.get("openAccessPdf") or {}
+                a_list = p.get("authors", []) or []
+                a_str = ", ".join(a.get("name", "") for a in a_list[:3])
+                if len(a_list) > 3:
+                    a_str += " et al."
+                results.append({
+                    "title": p.get("title") or title,
+                    "authors": a_str or authors_str,
+                    "year": p.get("year"),
+                    "venue": p.get("venue", "") or "ALICIA",
+                    "citationCount": p.get("citationCount", 0) or 0,
+                    "abstract": p.get("abstract") or "",
+                    "url": p.get("url") or url,
+                    "openAccessPdf": oa,
+                    "externalIds": p.get("externalIds") or {},
+                    "source": "alicia",
+                    "_peru_repo": True,
+                    "_data_source_kw": "alicia concytec peru",
+                })
+                continue
+        except Exception:
+            pass
+        # Fallback: return raw ALICIA metadata without S2 enrichment
+        results.append({
+            "title": title,
+            "authors": authors_str,
+            "year": None,
+            "venue": "ALICIA",
+            "citationCount": 0,
+            "abstract": "",
+            "url": url,
+            "openAccessPdf": {},
+            "externalIds": {},
+            "source": "alicia",
+            "_peru_repo": True,
+            "_data_source_kw": "alicia concytec peru",
+        })
+
+    print(f"  [alicia] {len(results)} enriched candidates")
+    return results
+
+
+# ── DSpace Peru repositories (PUCP, UP, repositorio.concytec) ────────────────
+#
+# SOURCE:  University and CONCYTEC DSpace repositories
+# API:     DSpace 7 REST: /server/api/discover/search/objects?query=...
+#          DSpace 6 REST: /rest/items?q=...  (fallback)
+# NOTES:   Free, no auth. Search is full-text over metadata fields.
+#          Used for seed-paper discovery in replicate mode for Peru-focused work.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PERU_DSPACE_PORTALS = [
+    # PUCP disabled 2026-06-20: OAI + REST both 404, site migrated CMS
+    # {
+    #     "label": "PUCP Repositorio",
+    #     "base": "https://repositorio.pucp.edu.pe",
+    #     "search_path": "/search",
+    # },
+    {
+        "label": "UP Repositorio",
+        "base": "https://repositorio.up.edu.pe",
+        "search_path": "/search",
+    },
+    {
+        "label": "Repositorio CONCYTEC",
+        "base": "https://repositorio.concytec.gob.pe",
+        "search_path": "/search",
+        # DSpace 7 at /server/api/discover/search/objects → 200 (verified 2026-06-20)
+        # DSpace 6 /rest/items → 404 (migrated); OAI → 404
+    },
+]
+
+
+def _search_dspace_portal(base_url: str, portal_label: str,
+                           topic: str, max_results: int = 5) -> list[dict]:
+    """Search a single DSpace 7 repository for papers matching topic.
+
+    Tries DSpace 7 REST API first, falls back to DSpace 6, returns [] on failure.
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [{portal_label}] Searching for '{topic[:50]}'...")
+
+    # DSpace 7 REST API
+    results = []
+    try:
+        r = requests.get(
+            f"{base_url.rstrip('/')}/server/api/discover/search/objects",
+            params={
+                "query": topic,
+                "dsoType": "ITEM",
+                "size": max_results,
+                "embed": "item",
+            },
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        embedded = (data.get("_embedded", {}) or {}).get("searchResult", {}) or {}
+        items_wrap = (embedded.get("_embedded", {}) or {}).get("objects", []) or []
+        for obj in items_wrap[:max_results]:
+            item = (obj.get("_embedded", {}) or {}).get("indexableObject", {}) or {}
+            name = item.get("name", "") or ""
+            if not name:
+                continue
+            handle = item.get("handle", "") or ""
+            item_url = f"{base_url.rstrip('/')}/handle/{handle}" if handle else base_url
+            metadata = item.get("metadata", {}) or {}
+
+            def _meta(field: str) -> str:
+                vals = metadata.get(field, []) or []
+                return vals[0].get("value", "") if vals else ""
+
+            authors_str = _meta("dc.contributor.author") or _meta("dc.creator")
+            year_str = (_meta("dc.date.issued") or _meta("dc.date.created") or "")[:4]
+
+            results.append({
+                "title": name,
+                "authors": authors_str,
+                "year": int(year_str) if year_str.isdigit() else None,
+                "venue": portal_label,
+                "citationCount": 0,
+                "abstract": _meta("dc.description.abstract")[:400],
+                "url": item_url,
+                "openAccessPdf": {},
+                "externalIds": {},
+                "source": "dspace_peru",
+                "_peru_repo": True,
+                "_portal": portal_label,
+                "_data_source_kw": f"{portal_label.lower()} peru",
+            })
+    except Exception as exc:
+        print(f"  [{portal_label}] DSpace 7 API failed: {exc}")
+
+    if not results:
+        # DSpace 6 fallback
+        try:
+            r6 = requests.get(
+                f"{base_url.rstrip('/')}/rest/items",
+                params={"q": topic, "limit": max_results, "expand": "metadata"},
+                headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+                timeout=20,
+            )
+            r6.raise_for_status()
+            for item in (r6.json() or [])[:max_results]:
+                name = item.get("name", "") or ""
+                if not name:
+                    continue
+                handle = item.get("handle", "") or ""
+                item_url = f"{base_url.rstrip('/')}/handle/{handle}" if handle else base_url
+                meta_list = item.get("metadata", []) or []
+
+                def _meta6(key: str) -> str:
+                    for m in meta_list:
+                        if m.get("key") == key:
+                            return m.get("value", "")
+                    return ""
+
+                authors_str = _meta6("dc.contributor.author") or _meta6("dc.creator")
+                year_str = (_meta6("dc.date.issued") or "")[:4]
+                results.append({
+                    "title": name,
+                    "authors": authors_str,
+                    "year": int(year_str) if year_str.isdigit() else None,
+                    "venue": portal_label,
+                    "citationCount": 0,
+                    "abstract": _meta6("dc.description.abstract")[:400],
+                    "url": item_url,
+                    "openAccessPdf": {},
+                    "externalIds": {},
+                    "source": "dspace_peru",
+                    "_peru_repo": True,
+                    "_portal": portal_label,
+                    "_data_source_kw": f"{portal_label.lower()} peru",
+                })
+        except Exception as exc2:
+            print(f"  [{portal_label}] DSpace 6 fallback failed: {exc2}")
+
+    print(f"  [{portal_label}] {len(results)} result(s)")
+    return results
+
+
+def _search_peru_dspace_repos(topic: str, max_results_each: int = 4) -> list[dict]:
+    """Search all configured Peru DSpace portals (PUCP, UP, CONCYTEC) + FacultyUP.
+
+    UP repositorio uses Playwright (bot-protection blocks REST/OAI-PMH).
+    FacultyUP (PURE portal) uses undetected-chromedriver (Cloudflare bypass).
+    PUCP and CONCYTEC use DSpace 7 REST API.
+    """
+    all_results: list[dict] = []
+    for portal in _PERU_DSPACE_PORTALS:
+        try:
+            if "up.edu.pe" in portal["base"]:
+                # UP blocks automated REST/OAI-PMH — use Playwright scraper
+                all_results.extend(_search_up_repository(topic, max_results=max_results_each))
+            else:
+                all_results.extend(
+                    _search_dspace_portal(
+                        portal["base"], portal["label"], topic, max_results_each
+                    )
+                )
+        except Exception:
+            continue
+    # FacultyUP — PURE portal for UP faculty journal publications (Cloudflare-protected)
+    try:
+        all_results.extend(_search_faculty_up(topic, max_results=max_results_each))
+    except Exception:
+        pass
+    return all_results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Peru government data portals — integrated searchers [EXPERIMENTAL]
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# STATUS: EXPERIMENTAL — integración inicial, sujeta a validación.
+#   - APIs verificadas funcionales (HTTP 200, datos reales) al 2026-05-30.
+#   - URLs de descarga directa verificadas (HTTP HEAD).
+#   - Cobertura de años estimada con datos reales del /api/v1/indexCountData.
+#   - NO probado end-to-end en Path C. Puede requerir ajustes de encoding,
+#     tamaño de archivo, o estructura de datos no anticipada.
+#   - INDECOPI sin API: solo referencias curadas, requiere scraping manual.
+#   TODO: validar que los archivos descargados son parseables por pandas.
+#   TODO: verificar encoding real de cada fuente (UTF-8 asumido).
+#   TODO: probar con --paperdl off --notebooklm off para aislar.
+#
+# All follow the same anti-hallucination pattern:
+#   Python function → real HTTP/API call → structured dict → Claude sees output
+#
+# 1. OSCE OCDS API  —  contratacionesabiertas.oece.gob.pe/api/v1/
+# 2. PUNKU OSIPTEL  —  punku.osiptel.gob.pe (ZIP directo, ~182 MB)
+# 3. INDECOPI       —  iasearch.io + buscadorResoluciones (sin API pública)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. OSCE Contrataciones Abiertas (OCDS API) ───────────────────────────────
+#
+# SOURCE:     Organismo Especializado para las Contrataciones Públicas Eficientes
+#             (OECE), formerly OSCE. Data extracted from SEACE v1, v2, and v3.
+# API:        REST, no auth required. Base: contratacionesabiertas.oece.gob.pe
+# STANDARD:   Open Contracting Data Standard (OCDS) — JSON structured releases.
+# COVERAGE:   2003–present (verified via /api/v1/indexCountData).
+#             Bulk starts 2004: 95K contracts/year, peaks at 313K (2008).
+#             Steady state 2010+: ~130-170K contracts/year.
+# VOLUME:     2,731,604 OCDS records, 493,807 suppliers, 3,314 buyers.
+# UPDATE:     Daily (records appear within 24h of SEACE publication).
+#             Monthly bulk exports at /api/v1/files (CSV + JSON).
+# DATA TYPES: Panel (entity × supplier × time), cross-section (per contract).
+#             Each OCDS record = one procurement process with full timeline:
+#             tender → award → contract → implementation milestones.
+# FIELDS:     ocid, tender (title, description, procurementMethod, value{amount,
+#             currency}, procuringEntity{name,id}, mainProcurementCategory),
+#             buyer{name,id}, awards, contracts, releases[{date,url}],
+#             dataSegmentation{id (YYYY-MM)}, sources[{name,id,url}].
+# METHODS:    procurementMethod values: "direct", "limited", "open",
+#             "selective", "competitive" — maps to: contratación directa,
+#             licitación pública, concurso público, adjudicación simplificada,
+#             subasta inversa electrónica.
+# VALUE:      For econ research — natural experiments in procurement reform,
+#             DiD with staggered policy adoption across entities, collusion/
+#             corruption detection, supplier dynamics, price dispersion analysis,
+#             political connections (entity × supplier network panels).
+#
+# Endpoints (all GET, no auth):
+#   /api/v1/search?format=json&paginateBy=N&page=N     paginated search
+#   /api/v1/records?format=json&source=X&year=Y&month=M filtered records
+#   /api/v1/files?format=json                           monthly bulk exports
+#   /api/v1/indexCountData?format=json                  aggregate stats
+#   /api/v1/buyers?format=json&source=X                 procuring entities
+#   /api/v1/suppliers?format=json&source=X              suppliers
+#   /api/v1/release/{ocid}                              full OCDS JSON release
+
+_OCDS_API_BASE = "https://contratacionesabiertas.oece.gob.pe/api/v1"
+
+_OCDS_KEYWORDS = [
+    "contratacion", "contratación", "contrato", "contract", "procurement",
+    "adquisicion", "adquisición", "licitacion", "licitación", "seace",
+    "osce", "oece", "proveedor", "proveedores", "adjudicacion", "adjudicación",
+    "compra publica", "compra pública", "public procurement",
+    "gobierno", "government", "estado", "municipalidad", "ministerio",
+    "gasto publico", "gasto público", "public spending",
+    "corrupcion", "corrupción", "corruption",
+    "transparencia", "transparency", "fiscalizacion", "fiscalización",
+    "concurso", "subasta", "obras publicas", "obras públicas",
+    "ejecucion contractual", "ejecución contractual", "infraestructura",
+    "ocds", "open contracting", "contratacion abierta", "contratación abierta",
+]
+
+
+def _search_ocds(topic: str, max_results: int = 5) -> list[dict]:
+    """Search OSCE OCDS API for procurement contracts matching topic keywords.
+
+    Hits the real /api/v1/search endpoint. Returns structured candidates with
+    entity, amount, method, and OCDS metadata. Claude never touches the API.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _OCDS_KEYWORDS):
+        return []
+
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    print(f"  [ocds] Searching contratacionesabiertas.oece.gob.pe for '{topic}'...")
+    try:
+        r = requests.get(
+            f"{_OCDS_API_BASE}/search",
+            params={"format": "json", "paginateBy": max_results, "page": 1},
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+        records = data.get("results", []) or []
+
+        results = []
+        for rec in records:
+            release = rec.get("compiledRelease", {})
+            tender = release.get("tender", {})
+            buyer = release.get("buyer", {})
+            entity = tender.get("procuringEntity", {})
+            seg = rec.get("dataSegmentation", {})
+
+            title = tender.get("title", "Sin título")[:120]
+            desc = tender.get("description", "")[:300]
+            amount = tender.get("value", {}).get("amount", 0)
+            currency = tender.get("value", {}).get("currency", "PEN")
+            method = tender.get("procurementMethod", "?")
+            period = seg.get("id", "?") if isinstance(seg, dict) else str(seg or "?")
+
+            results.append({
+                "name": f"OSCE OCDS: {title}",
+                "provider": f"OSCE OCDS ({entity.get('name', buyer.get('name', 'Perú'))})",
+                "url": f"{_OCDS_API_BASE}/release/{rec.get('ocid', '')}",
+                "download_url": f"{_OCDS_API_BASE}/release/{rec.get('ocid', '')}?format=json",
+                "download_format": "json",
+                "description": (
+                    f"[{method}] {period} | {desc}. "
+                    f"Monto: {currency} {amount:,.2f}. "
+                    f"Entidad: {entity.get('name', '?')}. "
+                    f"OCID: {rec.get('ocid', '?')}"
+                ),
+                "source_api": "ocds",
+                "country": "Peru",
+                "data_years": "2003–present",
+                "data_types": ["panel", "cross-section"],
+                "n_records_total": 2731604,
+                "pipeline_status": "experimental",
+            })
+
+        print(f"  [ocds] Found {len(results)} contracts for '{topic}'")
+        return results[:max_results]
+    except Exception as exc:
+        print(f"  [ocds] API error: {exc}")
+        return []
+
+
+def _try_download_ocds(ocid_or_url: str, data_dir: Path) -> str | None:
+    """Download a full OCDS release as JSON. Returns path or None."""
+    try:
+        import requests
+        url = ocid_or_url if ocid_or_url.startswith("http") else \
+              f"{_OCDS_API_BASE}/release/{ocid_or_url}"
+        r = requests.get(url, params={"format": "json"}, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        ocid = data.get("ocid", "release") if isinstance(data, dict) else "release"
+        safe_name = ocid.replace("/", "_").replace(":", "-")[:100]
+        out_path = data_dir / f"ocds_{safe_name}.json"
+        import json
+        out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        size_kb = out_path.stat().st_size / 1024
+        print(f"  [ocds] Downloaded: {out_path.name} ({size_kb:.0f} KB)")
+        return str(out_path)
+    except Exception as exc:
+        print(f"  [ocds] Download failed: {exc}")
+        return None
+
+
+# ── 2. PUNKU OSIPTEL (telecom regulator open data) ──────────────────────────
+#
+# SOURCE:     OSIPTEL — Organismo Supervisor de Inversión Privada en
+#             Telecomunicaciones. Peru's telecom regulator since 1994.
+# PORTAL:     PUNKU = Plataforma de Datos Abiertos de OSIPTEL
+#             https://punku.osiptel.gob.pe/
+# ACCESS:     Direct ZIP download, no auth. Single archive with all datasets.
+#             URL: https://punku.osiptel.gob.pe/Archivos/Datasets-PUNKU-OSIPTEL.zip
+# SIZE:       ~182 MB compressed (verified 2026-05-21 via HTTP HEAD).
+# UPDATE:     Monthly (verified Last-Modified header: 2026-05-21).
+# COVERAGE:   Estimated 2014–present based on OSIPTEL's digital data program.
+#             Exact range determined by ZIP contents at download time.
+# CONTENTS:   Multiple CSV datasets inside the ZIP. Based on PUNKU portal:
+#             - Calidad de servicio móvil (mobile QoS by district/operator)
+#             - Internet móvil (mobile internet speed tests, latency, coverage)
+#             - Cobertura móvil 2G/3G/4G/5G (coverage maps by technology)
+#             - Reclamos de usuarios (complaints: operator, region, type, outcome)
+#             - Tarifas y planes (tariff plans by operator/service)
+#             - Despliegue de infraestructura (towers, fiber, spectrum assignments)
+#             - Indicadores de conectividad (household/business internet penetration)
+# DATA TYPES: Panel (district × operator × month), cross-section (coverage snapshots).
+# VALUE:      Natural experiments in telecom regulation, DiD with staggered 4G/5G
+#             deployment, digital divide analysis, competition in mobile markets,
+#             regulatory impact evaluation, consumer complaint dynamics.
+# NOTE:       ZIP filename is stable but contents may change. Unzip at download
+#             time and profile with pandas before use in pipeline.
+
+_PUNKU_KEYWORDS = [
+    "telecom", "telecomunicacion", "telecomunicación", "telecomunicaciones",
+    "osiptel", "punku", "internet", "banda ancha", "broadband",
+    "celular", "movil", "móvil", "telefonia", "telefonía", "phone",
+    "cobertura", "coverage", "velocidad", "speed", "speedtest",
+    "fibra optica", "fibra óptica", "fiber", "4g", "5g", "lte",
+    "operador", "operator", "movistar", "claro", "entel", "bitel",
+    "reclamo", "reclamos", "queja", "quejas", "complaint", "complaints",
+    "tarifa", "tarifas", "plan", "planes", "tariff",
+    "conectividad", "connectivity", "brecha digital", "digital divide",
+    "regulacion", "regulación", "regulation", "regulator",
+]
+
+
+def _search_punku(topic: str, max_results: int = 1) -> list[dict]:
+    """Surface PUNKU OSIPTEL telecom dataset for telecom/digital economy topics.
+
+    Returns curated candidate with verified direct ZIP download URL.
+    Anti-hallucination: deterministic keyword matching, HTTP-verified ZIP URL.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _PUNKU_KEYWORDS):
+        return []
+
+    print(f"  [punku] OSIPTEL telecom dataset candidate for '{topic}'")
+    return [{
+        "name": "PUNKU OSIPTEL — Datos Abiertos de Telecomunicaciones Perú",
+        "provider": "OSIPTEL / PUNKU",
+        "url": "https://punku.osiptel.gob.pe/",
+        "download_url": (
+            "https://punku.osiptel.gob.pe/Archivos/Datasets-PUNKU-OSIPTEL.zip"
+        ),
+        "download_format": "zip",
+        "description": (
+            "Datasets completos del regulador de telecomunicaciones peruano OSIPTEL. "
+            "Incluye: calidad de servicio móvil por distrito y operador, mediciones "
+            "de velocidad de internet (Speedtest), cobertura móvil 2G/3G/4G/5G, "
+            "reclamos de usuarios por operador/región/tipo, tarifas y planes, "
+            "despliegue de infraestructura (torres, fibra, espectro), e indicadores "
+            "de conectividad (penetración de internet en hogares/empresas). "
+            "ZIP ~182 MB con múltiples CSVs. Panel geográfico: distrito × indicador "
+            "× período. Cobertura estimada: 2014–present. Actualización mensual."
+        ),
+        "source_api": "punku",
+        "country": "Peru",
+        "data_years": "2014–present (estimated, verified by ZIP contents at download)",
+        "data_types": ["panel", "cross-section", "time-series"],
+        "pipeline_status": "experimental",
+    }][:max_results]
+
+
+# ── 3. INDECOPI (competition, consumer protection, intellectual property) ───
+#
+# SOURCE:     INDECOPI — Instituto Nacional de Defensa de la Competencia y de
+#             la Protección de la Propiedad Intelectual. Created 1992 (D.L. 25868).
+#             Peru's multi-sector regulator: antitrust, consumer protection,
+#             IP (patents, trademarks, copyright), dumping/subsidies, bureaucratic
+#             barriers, bankruptcy (disolved 2025 → new entity).
+# PORTALS:    a) Buscador Avanzado de Resoluciones (AI semantic search)
+#                https://indecopi.iasearch.io/
+#                Semantic + structured search over resolutions, sanctions, precedents.
+#                Underlying tech: iasearch.io platform. No public API.
+#             b) Buscador de Resoluciones (JBoss Seam, legacy)
+#                https://servicio.indecopi.gob.pe/buscadorResoluciones/
+#                6 category sub-portals: Tribunal, Propiedad Intelectual,
+#                Protección al Consumidor, Defensa de la Competencia,
+#                Sentencias del Poder Judicial, LAUDOS (arbitration).
+#                Each at {category}.seam — server-rendered HTML, no API.
+# COVERAGE:   Estimated 1993–present. Digital records sparse pre-2000;
+#             consistent coverage from ~2005 (case management system adoption).
+#             Each category may have different start dates.
+# DATA TYPES: Cross-section (per resolution). Fields: case number, date,
+#             parties (plaintiff, defendant), sector/industry, legal basis,
+#             resolution type (sanction, precedent, ruling, dismissal),
+#             outcome (fine amount, corrective measure, absolved), chamber/sala.
+# VALUE:      Antitrust enforcement dynamics, consumer protection effectiveness,
+#             IP litigation as innovation proxy, regulatory capture tests,
+#             bureaucratic barriers as trade costs, arbitration outcomes.
+# STRATEGY:   Curated reference entries. NO automated download — pipeline skips
+#             these in Path C (requires_manual_fetch: True). Data retrieval
+#             needs Firecrawl scraping or manual browser export. These entries
+#             exist so Claude KNOWS the data exists and can tell the researcher
+#             "INDECOPI has this — go download it manually from [URL]."
+
+_INDECOPI_KEYWORDS = [
+    "indecopi", "competencia", "competition", "antitrust", "antimonopolio",
+    "propiedad intelectual", "intellectual property", "patente", "patent",
+    "marca", "trademark", "derechos de autor", "copyright",
+    "proteccion al consumidor", "protección al consumidor",
+    "consumer protection", "consumidor", "consumer",
+    "sancion", "sanción", "sanction", "multa", "fine",
+    "precedente", "precedent", "resolucion", "resolución", "resolution",
+    "tribunal", "court", "arbitration", "arbitraje", "laudo",
+    "defensa de la competencia", "competition defense",
+    "barreras burocraticas", "barreras burocráticas", "bureaucratic barriers",
+    "dumping", "subsidios", "subsidy", "competencia desleal", "unfair competition",
+]
+
+
+def _search_indecopi(topic: str, max_results: int = 2) -> list[dict]:
+    """Surface INDECOPI as a data source for competition/consumer/IP topics.
+
+    No public API — curated reference entries. Pipeline skips automated
+    download; user must scrape manually or use Firecrawl.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _INDECOPI_KEYWORDS):
+        return []
+
+    results = []
+
+    # ── Competition / antitrust ──────────────────────────────────────────
+    if any(k in topic_lower for k in ["competencia", "competition", "antitrust",
+                                        "antimonopolio", "defensa de la competencia",
+                                        "barreras burocraticas", "barreras burocráticas"]):
+        results.append({
+            "name": "INDECOPI — Resoluciones de Defensa de la Competencia",
+            "provider": "INDECOPI (buscadorResoluciones)",
+            "url": "https://servicio.indecopi.gob.pe/buscadorResoluciones/competencia.seam",
+            "download_url": "",
+            "download_format": "html",
+            "description": (
+                "Resoluciones de la Sala de Defensa de la Competencia del INDECOPI "
+                "(1993–present). Incluye: abuso de posición de dominio, carteles y "
+                "prácticas colusorias, barreras burocráticas, competencia desleal, "
+                "dumping y subsidios. ~300-500 resoluciones/año. Campos: expediente, "
+                "fecha, denunciante, denunciado, sector, conducta, resolución, multa. "
+                "Sin API pública — requiere scraping con Firecrawl o descarga manual "
+                "desde el buscador JBoss Seam."
+            ),
+            "source_api": "indecopi",
+            "country": "Peru",
+            "data_years": "1993–present",
+            "data_types": ["cross-section"],
+            "pipeline_status": "experimental",
+            "requires_manual_fetch": True,
+        })
+
+    # ── Consumer protection ──────────────────────────────────────────────
+    if any(k in topic_lower for k in ["consumidor", "consumer", "proteccion",
+                                        "protección"]):
+        results.append({
+            "name": "INDECOPI — Resoluciones de Protección al Consumidor",
+            "provider": "INDECOPI (buscadorResoluciones)",
+            "url": "https://servicio.indecopi.gob.pe/buscadorResoluciones/proteccion-consumidor.seam",
+            "download_url": "",
+            "download_format": "html",
+            "description": (
+                "Resoluciones de la Sala de Protección al Consumidor del INDECOPI "
+                "(1993–present). Incluye: idoneidad de productos/servicios, información "
+                "adecuada, métodos abusivos de cobranza, discriminación en el consumo, "
+                "incumplimiento de garantías. ~2000+ resoluciones/año. Mayor volumen "
+                "de casos del INDECOPI. Campos: expediente, fecha, consumidor, "
+                "proveedor, sector, infracción, medida correctiva, multa. "
+                "Sin API pública — requiere scraping o descarga manual."
+            ),
+            "source_api": "indecopi",
+            "country": "Peru",
+            "data_years": "1993–present",
+            "data_types": ["cross-section"],
+            "requires_manual_fetch": True,
+        })
+
+    # ── Intellectual property ────────────────────────────────────────────
+    if any(k in topic_lower for k in ["propiedad intelectual", "intellectual property",
+                                        "patente", "patent", "marca", "trademark",
+                                        "derechos de autor", "copyright"]):
+        results.append({
+            "name": "INDECOPI — Resoluciones de Propiedad Intelectual",
+            "provider": "INDECOPI (buscadorResoluciones)",
+            "url": "https://servicio.indecopi.gob.pe/buscadorResoluciones/propiedad-intelectual.seam",
+            "download_url": "",
+            "download_format": "html",
+            "description": (
+                "Resoluciones de la Sala de Propiedad Intelectual del INDECOPI "
+                "(1993–present). Incluye: registro y oposición de marcas, patentes "
+                "farmacéuticas y biotecnológicas, derechos de autor, infracciones de "
+                "PI, nombres comerciales y denominaciones de origen. Relevante para "
+                "economía de la innovación: patentes como proxy de I+D, litigios de "
+                "marcas como barreras de entrada. ~500-800 resoluciones/año. "
+                "Sin API pública — requiere scraping o descarga manual."
+            ),
+            "source_api": "indecopi",
+            "country": "Peru",
+            "data_years": "1993–present",
+            "data_types": ["cross-section"],
+            "requires_manual_fetch": True,
+        })
+
+    if results:
+        print(f"  [indecopi] Matched {len(results)} INDECOPI reference(s) for '{topic}'")
+    return results[:max_results]
+
+
+# ── INGEMMET GEOCATMIN (Peru geology/mining spatial data) integration ─────────
+#
+# GEOCATMIN exposes OGC WMS/WFS services with 245+ layers including mineral
+# deposits, mining cadastre, geological maps, and geochemistry. WFS endpoints
+# return vector data (points/polygons) consumable by geopandas for spatial
+# instruments (e.g. distance-to-deposit IVs). No auth required.
+#
+# Layers used (verified live 2026-05-30):
+#   SERV_GEOLOGIA_M/MapServer/WFSServer — geology 1:1M (mineral deposits)
+#   SERV_CATASTRO_MINERO/MapServer/WFSServer — mining cadastre (concessions)
+#
+# Download uses owslib if installed, else raw requests + manual GeoJSON parse.
+_INGEMMET_WFS_BASE = (
+    "http://geocatmin.ingemmet.gob.pe/arcgis/services"
+)
+_INGEMMET_LAYERS: list[dict] = [
+    {
+        "name": "GEOCATMIN — Depósitos Minerales (Geología 1:1M)",
+        "service": "SERV_GEOLOGIA_M/MapServer/WFSServer",
+        "type": "wfs",
+        "description": (
+            "Yacimientos y depósitos minerales del Perú a escala 1:1,000,000. "
+            "Incluye: tipo de depósito, commodity principal, estatus, geometría "
+            "(puntos/polígonos). Fuente: INGEMMET GEOCATMIN. "
+            "Útil como instrumento espacial: distancia/proximidad a depósitos, "
+            "densidad de yacimientos por distrito, índice de potencial minero."
+        ),
+    },
+    {
+        "name": "GEOCATMIN — Catastro Minero (Concesiones)",
+        "service": "PSAD56_18/SERV_CATASTRO_MINERO_18/MapServer/WFSServer",
+        "type": "wfs",
+        "description": (
+            "Derechos mineros y concesiones vigentes en Perú. Incluye: titular, "
+            "área, fecha de otorgamiento, tipo de derecho, estado. "
+            "Fuente: INGEMMET GEOCATMIN."
+        ),
+    },
+]
+_INGEMMET_KEYWORDS = [
+    "mineria", "minería", "minero", "minera", "mineral", "mining",
+    "geologia", "geología", "geologico", "geológico", "yacimiento",
+    "deposito", "depósito", "metal", "cobre", "oro", "zinc", "plata",
+    "concesion", "concesión", "catastro minero", "ingemmet", "geocatmin",
+    "extractivo", "extractive", "recursos naturales", "natural resources",
+]
+
+
+def _search_ingemmet(topic: str, max_results: int = 2) -> list[dict]:
+    """Return INGEMMET GEOCATMIN spatial data candidates for mining/geology topics.
+
+    WFS endpoints serve vector layers consumable by geopandas/QGIS.
+    No API key — open OGC services. Requires `owslib` for download;
+    discovery works with requests alone.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _INGEMMET_KEYWORDS):
+        return []
+
+    results = []
+    for layer in _INGEMMET_LAYERS:
+        wfs_url = f"{_INGEMMET_WFS_BASE}/{layer['service']}"
+        results.append({
+            "name": layer["name"],
+            "provider": "INGEMMET GEOCATMIN (WFS)",
+            "url": "https://geocatmin.ingemmet.gob.pe/",
+            "download_url": wfs_url,
+            "download_format": "geojson",
+            "description": layer["description"][:300],
+            "source_api": "ingemmet",
+            "country": "Peru",
+            "data_types": ["spatial"],
+            "wfs_layer": layer["service"],
+            "requires_manual_acquisition": False,  # WFS is auto-downloadable
+            "extraction_tool": "owslib.wfs.WebFeatureService",
+        })
+        if len(results) >= max_results:
+            break
+
+    if results:
+        print(f"  [ingemmet] Spatial data candidates for '{topic}': {len(results)} layer(s)")
+    return results
+
+
+# ── MEF Consulta Amigable — manual reference catalog ─────────────────────────
+#
+# The MEF "Consulta Amigable" web portal (Consulta de Transferencias a los
+# Gobiernos Locales, Regionales y Nacionales) is the authoritative source for
+# mining canon, royalties, and fiscal transfers in Peru. It has NO public API
+# — data must be exported manually through the web UI.
+#
+# These curated references surface the portal URL and export instructions so
+# the pipeline can tell researchers exactly what to do. The entries carry
+# `requires_manual_acquisition: true` so Stage 1.5 / Stage 3.5 know to show
+# instructions rather than attempt automated download.
+_MEF_CONSULTA_AMIGABLE_REFERENCES: list[dict] = [
+    {
+        "name": "MEF Consulta Amigable — Canon Minero (Transferencias a Gobiernos Locales)",
+        "url": "https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx",
+        "description": (
+            "Transferencias de canon minero a municipalidades distritales y provinciales "
+            "del Perú. Datos anuales por distrito. Incluye: canon minero, canon "
+            "hidroenergético, canon pesquero, canon gasífero, canon forestal, "
+            "regalías mineras, FONCOMUN, FOCAM. "
+            "Exportar: seleccionar año → Gobiernos Locales → Canon Minero → "
+            "todos los departamentos → Exportar a Excel/CSV."
+        ),
+        "requires_manual_acquisition": True,
+        "export_instructions": (
+            "1. Ir a https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx\n"
+            "2. Seleccionar 'Gobiernos Locales' como nivel de gobierno\n"
+            "3. En 'Tipo de Transferencia', marcar 'Canon Minero'\n"
+            "4. Seleccionar el año deseado (repetir para cada año del panel)\n"
+            "5. En 'Departamento', seleccionar 'Todos'\n"
+            "6. Hacer clic en 'Consultar' y luego 'Exportar' → CSV/Excel\n"
+            "7. Guardar en data/external/mef/canon_minero_YYYY.csv"
+        ),
+    },
+    {
+        "name": "MEF Consulta Amigable — Canon y Sobrecanon (todos los tipos)",
+        "url": "https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx",
+        "description": (
+            "Transferencias totales por canon y sobrecanon a gobiernos subnacionales. "
+            "Incluye canon minero, gasífero, hidroenergético, pesquero, forestal, "
+            "y sobrecanon petrolero. Datos anuales por distrito/provincia/región. "
+            "Exportar como CSV desde el portal web."
+        ),
+        "requires_manual_acquisition": True,
+        "export_instructions": (
+            "1. Ir a https://apps5.mineco.gob.pe/transparencia/Navegador/default.aspx\n"
+            "2. Seleccionar nivel de gobierno (Local/Regional)\n"
+            "3. Marcar todos los tipos de canon y sobrecanon requeridos\n"
+            "4. Seleccionar año → Todos los departamentos → Consultar → Exportar CSV"
+        ),
+    },
+]
+_MEF_KEYWORDS = [
+    "canon", "transferencia", "mef", "consulta amigable", "regalias",
+    "regalías", "sobrecanon", "sobrecanón", "foncomun", "focam",
+    "ingresos fiscales", "fiscal transfers", "mining revenue",
+    "gobierno local", "municipalidad", "gobierno regional",
+]
+
+
+def _search_mef_consulta_amigable(topic: str, max_results: int = 2) -> list[dict]:
+    """Return MEF Consulta Amigable references for canon/transfer topics.
+
+    No API exists — these are manual-download references with export instructions.
+    Pipeline shows the link and instructions; user must download CSV manually.
+    """
+    topic_lower = topic.lower()
+    if not any(k in topic_lower for k in _MEF_KEYWORDS):
+        return []
+
+    results = []
+    for ref in _MEF_CONSULTA_AMIGABLE_REFERENCES:
+        if any(k in topic_lower for k in _MEF_KEYWORDS):
+            results.append({
+                "name": ref["name"],
+                "provider": "MEF Consulta Amigable (manual)",
+                "url": ref["url"],
+                "download_url": "",  # no API
+                "download_format": "csv",
+                "description": ref["description"][:300],
+                "source_api": "mef_consulta_amigable",
+                "country": "Peru",
+                "data_types": ["panel"],
+                "requires_manual_acquisition": True,
+                "export_instructions": ref.get("export_instructions", ""),
+            })
+            if len(results) >= max_results:
+                break
+
+    if results:
+        print(f"  [mef] Canon/transfer references for '{topic}': {len(results)} "
+              f"source(s) — manual download (no API)")
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# (End of Peru government data block)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
 def _infer_country(candidate: dict) -> str:
     """Infer country from dataset name/description when not explicitly set."""
     if candidate.get("country"):
@@ -2832,8 +5083,9 @@ def _likely_quality(candidate: dict) -> bool:
     # Strong positive signals: pre-validated provenance
     # bcrp + datosabiertos_curated are official Peruvian sources with known,
     # directly-downloadable structure (same tier as INEI government microdata).
+    # ingemmet is INGEMMET GEOCATMIN WFS — official Peruvian geological survey.
     if src in ("curated_registry", "journal", "inei", "bcrp",
-               "datosabiertos_curated", "minem"):
+               "datosabiertos_curated", "minem", "ingemmet"):
         return True
 
     # Dataverse: title must signal an academic replication archive
@@ -2973,6 +5225,8 @@ def _count_quality_candidates_for_variant(variant: str) -> dict:
     #   INEI    — survey microdata (cross-sections / panels)
     #   BCRP    — macro monthly time series (inflation, FX, GDP, rates, trade)
     #   Datos Abiertos — national open-data portal (CKAN search + curated CSVs)
+    #   INGEMMET — mining/geology spatial data (WFS)
+    #   MEF     — canon/transfer references (manual download, no API)
     if _is_peru_topic(variant):
         candidates.extend(_search_inei(variant, max_results=5))
         candidates.extend(_search_bcrp(variant, max_results=1))
@@ -2980,6 +5234,11 @@ def _count_quality_candidates_for_variant(variant: str) -> dict:
         candidates.extend(_search_datosabiertos_curated(variant, max_results=5))
         candidates.extend(_search_datosabiertos_peru(variant, max_results=5))
         candidates.extend(_search_peru_replication_packages(variant, max_results=5))
+        candidates.extend(_search_ocds(variant, max_results=5))
+        candidates.extend(_search_punku(variant, max_results=1))
+        candidates.extend(_search_indecopi(variant, max_results=3))
+        candidates.extend(_search_ingemmet(variant, max_results=2))
+        candidates.extend(_search_mef_consulta_amigable(variant, max_results=2))
 
     n_total = len(candidates)
     n_high = sum(1 for c in candidates if _likely_quality(c))
@@ -3000,12 +5259,12 @@ def _rank_and_select_variant(counts: list[dict], original_topic: str) -> dict:
     sorted_counts = sorted(counts, key=lambda c: c["n_high_conf"], reverse=True)
 
     print(f"\n  TOPIC SUGGESTIONS (ranked by high-confidence quality datasets):")
-    print(f"  {'─' * 70}")
+    print(f"  {'-' * 70}")
     max_high = max((c["n_high_conf"] for c in sorted_counts), default=1) or 1
     for i, c in enumerate(sorted_counts, 1):
         bar_width = int(20 * c["n_high_conf"] / max_high)
-        bar = "█" * bar_width + " " * (20 - bar_width)
-        marker = " ← original" if c["variant"] == original_topic else ""
+        bar = "#" * bar_width + " " * (20 - bar_width)
+        marker = " <-- original" if c["variant"] == original_topic else ""
         print(f"  {i}. [{bar}] {c['n_high_conf']:>3} hi-conf "
               f"({c['n_total']:>3} total) — {c['variant'][:50]}{marker}")
     print()
@@ -3046,7 +5305,7 @@ def _validate_path_a_candidates(candidates: list[dict],
     # quality proxy then score_ceiling descending.
     def _rank_key(c):
         src = c.get("source_api", "")
-        if peru_topic and src in ("inei", "bcrp", "datosabiertos_curated", "minem"):
+        if peru_topic and src in ("inei", "bcrp", "datosabiertos_curated", "minem", "ingemmet"):
             return (0, 0)
         hi = 1 if _likely_quality(c) else 2
         return (hi, -(c.get("score_ceiling", 0) or 0))
@@ -3059,6 +5318,22 @@ def _validate_path_a_candidates(candidates: list[dict],
             break
         if len(qualified) >= 3:
             break  # We only need 3 validated datasets for Stage 2
+
+        if peru_topic:
+            country = _infer_country(c)
+            src_api = c.get("source_api", "")
+            peru_sources = {
+                "inei", "bcrp", "datosabiertos_curated", "datosabiertos_peru",
+                "minem", "ingemmet", "mef_consulta_amigable", "ocds",
+                "punku", "indecopi",
+            }
+            if country and country != "Peru":
+                print(f"  [skip] {c.get('name', 'Unknown')[:60]} — country={country}, topic requires Peru")
+                continue
+            if not country and src_api not in peru_sources:
+                print(f"  [skip] {c.get('name', 'Unknown')[:60]} — no Peru signal for Peru topic")
+                continue
+
         attempted += 1
 
         url = c.get("download_url") or c.get("url", "")
@@ -3081,6 +5356,25 @@ def _validate_path_a_candidates(candidates: list[dict],
         elif src_api == "minem":
             from .stage1_5_data_loading import _try_download_minem
             local_path = _try_download_minem(c, data_dir)
+        elif src_api == "ocds":
+            ocds_url = c.get("download_url", "")
+            local_path = _try_download_ocds(ocds_url, data_dir) if ocds_url else None
+        elif src_api == "punku":
+            punku_url = c.get("download_url", "")
+            local_path = _try_download_direct(punku_url, data_dir) if punku_url else None
+        elif src_api == "indecopi":
+            print(f"       [indecopi] Manual fetch required — skipping automated download")
+            continue  # no automated download; user must scrape manually
+        elif src_api == "ingemmet":
+            from .stage1_5_data_loading import _try_download_ingemmet
+            local_path = _try_download_ingemmet(c, data_dir)
+        elif src_api == "mef_consulta_amigable":
+            print(f"       [mef] Manual download — see export instructions")
+            instructions = c.get("export_instructions", "")
+            if instructions:
+                for line in instructions.split("\n"):
+                    print(f"       {line}")
+            continue  # manual download only
         elif src_api in ("datosabiertos_curated", "datosabiertos_peru") or "datosabiertos" in provider:
             from .stage1_5_data_loading import _try_download_datosabiertos
             local_path = _try_download_datosabiertos(c, data_dir)
@@ -3429,9 +5723,44 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
         })
 
     seed_papers = []
-    seed_papers.extend(_search_semantic_scholar_seed_papers(selected["variant"], max_results=8))
+    paperdl_mode = _resolve_paperdl_mode(state)
+    stage2_mode = state.get("config", {}).get("stage2_mode", "ask")
+
+    # i4replication.org catalog — only in replicate mode (293 verified papers)
+    if stage2_mode == "replicate":
+        seed_papers.extend(_search_i4replication(selected["variant"], max_results=10))
+        if selected["variant"] != topic:
+            seed_papers.extend(_search_i4replication(topic, max_results=5))
+
+        # OpenICPSR replication packages (AEA, NBER, journals) — replicate only
+        seed_papers.extend(_search_openicpsr(selected["variant"], max_results=8))
+        if selected["variant"] != topic:
+            seed_papers.extend(_search_openicpsr(topic, max_results=4))
+
+
+    # Peru DSpace repositories (PUCP, UP, CONCYTEC) — always (seed papers for any mode)
+    seed_papers.extend(_search_peru_dspace_repos(selected["variant"], max_results_each=4))
     if selected["variant"] != topic:
+        seed_papers.extend(_search_peru_dspace_repos(topic, max_results_each=2))
+
+    # ALICIA (Peru national OA repo) — always, not just replicate mode
+    seed_papers.extend(_search_alicia(selected["variant"], max_results=6))
+    if selected["variant"] != topic:
+        seed_papers.extend(_search_alicia(topic, max_results=4))
+
+    # BCRP research portal (working papers + journals) — Peru econ literature
+    seed_papers.extend(_search_bcrp_research(selected["variant"], max_results=6, pub_types=["working_paper", "estudios_economicos"]))
+    if selected["variant"] != topic:
+        seed_papers.extend(_search_bcrp_research(topic, max_results=4, pub_types=["working_paper", "estudios_economicos"]))
+
+    # paperdl (arXiv, OpenReview, PMLR, PMC) — richer metadata than SS alone
+    seed_papers.extend(_search_paperdl_seed_papers(selected["variant"], max_results=8, mode=paperdl_mode))
+    seed_papers.extend(_search_semantic_scholar_seed_papers(selected["variant"], max_results=8))
+    seed_papers.extend(_search_openalex_seed_papers(selected["variant"], max_results=8))
+    if selected["variant"] != topic:
+        seed_papers.extend(_search_paperdl_seed_papers(topic, max_results=5, mode=paperdl_mode))
         seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=5))
+        seed_papers.extend(_search_openalex_seed_papers(topic, max_results=5))
     for c in selected.get("candidates", []):
         p = _candidate_to_seed_paper(c)
         if p:
@@ -3540,10 +5869,10 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
 
 # ── Public runner ────────────────────────────────────────────────────────────
 
-def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = None, path_c: bool = False) -> dict:
+def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = None, path_c: bool = False, smoke: bool = False) -> dict:
     """Execute Stage 1 Discovery - Path A, B, or C."""
     if path_c:
-        return _run_path_c(project_dir, state)
+        return _run_path_c(project_dir, state, smoke=smoke)
 
     # Path A (no --data): topic-aware discovery with quality validation.
     # Self-contained — handles its own output file, state save, and summary.
@@ -3582,6 +5911,12 @@ def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = N
         _causal_design_warning(profile)
 
         # Build a Path B prompt with rich data context
+        folder_ctx = profile.get("folder_context", "")
+        primary_file_note = (
+            f"\nPrimary file profiled: {profile['primary_file']}\n"
+            f"Other files in folder (not loaded): {', '.join(profile.get('all_files', [])[1:10])}\n"
+            if profile.get("primary_file") else ""
+        )
         cols_summary = ", ".join(profile["columns"][:30])
         if len(profile["columns"]) > 30:
             cols_summary += f", ... ({len(profile['columns'])} total)"
@@ -3679,7 +6014,8 @@ def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = N
         prompt = f"""You are a research discovery assistant (Path B - user-provided data).
 
 The researcher works in: **{topic}**
-
+{folder_ctx if folder_ctx else ""}
+{primary_file_note}
 ## Dataset Structure Analysis
 
 {structure_desc}
@@ -4061,7 +6397,13 @@ Select the TOP 3 and return ONLY a JSON block:
     if papers_data and "seed_papers" in papers_data:
         state["stages"]["stage1"]["seed_papers"] = papers_data.get("seed_papers", [])
     elif not data_path:
-        seed_papers = _search_semantic_scholar_seed_papers(topic, max_results=8)
+        paperdl_mode = _resolve_paperdl_mode(state)
+        seed_papers = _search_paperdl_seed_papers(topic, max_results=8, mode=paperdl_mode)
+        seed_papers.extend(_search_semantic_scholar_seed_papers(topic, max_results=8))
+        seed_papers.extend(_search_openalex_seed_papers(topic, max_results=8))
+        if _is_peru_topic(topic):
+            seed_papers.extend(_search_bcrp_research(topic, max_results=6, pub_types=["working_paper", "estudios_economicos"]))
+        seed_papers = _dedupe_seed_papers(seed_papers)
         state["stages"]["stage1"]["seed_papers"] = seed_papers
 
     if not papers_data:
@@ -4119,4 +6461,13 @@ Select the TOP 3 and return ONLY a JSON block:
 
     state["current_stage"] = 1
     save_state(project_dir, state)
+
+    # ── NotebookLM checkpoint (optional, human-confirmed) ──────────────────
+    try:
+        from ..notebooklm_hooks import stage1_notebooklm_checkpoint
+        seed_papers = state["stages"]["stage1"].get("seed_papers", [])
+        stage1_notebooklm_checkpoint(project_dir, state, topic, seed_papers)
+    except Exception:
+        pass
+
     return state
