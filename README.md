@@ -485,3 +485,8 @@ All third-party components are used under their respective open-source licenses 
 ## License
 
 MIT — free to use, adapt, and share. Skills under `Skills/` retain their original [MIT license](https://github.com/claesbackman/AI-research-feedback) from Claes Bäckman.
+
+
+## See also
+
+- **[academic-research-skills](https://github.com/Imbad0202/academic-research-skills)** — complementary Claude Code skills for academic research workflows.
