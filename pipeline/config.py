@@ -3,13 +3,15 @@
 from pathlib import Path
 
 # ── Directory layout ─────────────────────────────────────────────────────────
-PAPERS_HQ     = Path(__file__).resolve().parent.parent
-PIPELINE_ROOT = PAPERS_HQ.parent
+PAPERS_HQ     = Path(__file__).resolve().parent.parent  # Top_papers_creator/
 
-SEARCH_REPO   = PIPELINE_ROOT / "search-repositories"
-JUNSHI_REPO   = PIPELINE_ROOT / "research-junshi"
 EVAL_REPO     = PAPERS_HQ / "idea-evaluation-pipeline"
 CLO_AUTHOR    = PAPERS_HQ / "clo-author"
+
+# External companion repos (clone alongside Top_papers_creator/ if needed)
+# These are NOT required for the pipeline to run — only Stage 1 optional enrichment.
+# SEARCH_REPO   = PAPERS_HQ.parent / "search-repositories"
+# JUNSHI_REPO   = PAPERS_HQ.parent / "research-junshi"
 
 # ── Stage constants ──────────────────────────────────────────────────────────
 MAX_STAGE3_PIVOTS   = 2      # Stage 3: max pivot iterations before stall warning

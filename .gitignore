@@ -7,3 +7,16 @@
 __pycache__/
 *.py[cod]
 *.pyc.*
+
+# Firecrawl local cache
+.firecrawl/
+
+# Pipeline outputs (user-generated, not part of the tool)
+projects/
+
+# Downloaded external data
+data/external/
+
+# OS junk
+Thumbs.db
+.DS_Store

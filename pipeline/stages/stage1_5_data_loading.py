@@ -78,7 +78,11 @@ def _try_download_dataverse(url: str, data_dir: Path) -> Optional[str]:
     # Extract DOI or persistent ID from URL
     # Formats: https://doi.org/10.7910/DVN/XXXX or https://dataverse.harvard.edu/dataset.xhtml?persistentId=...
     persistent_id = ""
-    if "doi.org/10.7910" in url:
+    if url.startswith("doi:10.7910/"):
+        persistent_id = url
+    elif url.startswith("10.7910/"):
+        persistent_id = "doi:" + url
+    elif "doi.org/10.7910" in url:
         persistent_id = "doi:" + url.split("doi.org/")[-1]
     elif "persistentId=" in url:
         persistent_id = url.split("persistentId=")[-1].split("&")[0]
@@ -1227,11 +1231,28 @@ def run(project_dir: Path, state: dict) -> dict:
 
     # Skip for Path B — data already profiled in Stage 1
     if path == "B" or stage1.get("data_profile"):
-        print("  [skip] Path B — data already profiled in Stage 1")
+        print("  [skip] Path B - data already profiled in Stage 1")
+        profile = stage1.get("data_profile", {}) or {}
+        data_path = stage1.get("data_path", "")
+        existing = state["stages"].get("stage1_5", {}).get("downloaded_datasets", [])
+        downloaded_datasets = existing
+        if data_path and profile and not downloaded_datasets:
+            first_source = (stage1.get("recommended_data_sources", [{}]) or [{}])[0]
+            downloaded_datasets = [{
+                "name": Path(data_path).name,
+                "local_path": data_path,
+                "warnings": [],
+                "profile": profile,
+                "score_ceiling": first_source.get("score_ceiling", 0),
+                "tier": first_source.get("tier", 9),
+            }]
         state["stages"]["stage1_5"] = {
             "status": "skipped",
             "reason": "Path B or data already profiled",
         }
+        if downloaded_datasets:
+            state["stages"]["stage1_5"]["downloaded_datasets"] = downloaded_datasets
+            state["stages"]["stage1_5"]["n_downloaded"] = len(downloaded_datasets)
         save_state(project_dir, state)
         return state
 
@@ -1325,7 +1346,11 @@ def run(project_dir: Path, state: dict) -> dict:
             print("\a", end="", flush=True)
 
             while True:
-                choice = input(f"\n       >> ").strip()
+                try:
+                    choice = input(f"\n       >> ").strip()
+                except EOFError:
+                    choice = "3"
+                    print("\n       [auto] No interactive input available; skipping this dataset")
 
                 if choice == "3" or choice.lower() == "skip":
                     print(f"       [skip] Skipping this dataset\n")

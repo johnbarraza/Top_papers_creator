@@ -30,6 +30,35 @@ def run(project_dir: Path, state: dict) -> dict:
         print("  [error] No ideas found from Stage 2. Run Stage 2 first.")
         sys.exit(1)
 
+    rejected = state["stages"].get("stage2", {}).get("rejected_ideas", [])
+    if rejected:
+        rejected_signatures = {
+            (x.get("title", ""), x.get("method", ""), x.get("research_question", ""))
+            for x in rejected
+        }
+        before = len(top_ideas)
+        top_ideas = [
+            idea for idea in top_ideas
+            if (
+                idea.get("title", ""),
+                idea.get("method", ""),
+                idea.get("research_question", ""),
+            ) not in rejected_signatures
+        ]
+        removed = before - len(top_ideas)
+        if removed:
+            print(f"  [filter] Removed {removed} idea(s) already rejected by Stage 3.3.")
+
+    if not top_ideas:
+        print("  [loop] All current ideas were rejected by Stage 3.3. Returning to Stage 2.")
+        state["stages"]["stage2_5"] = {
+            "status": "completed",
+            "action": "REJECT",
+            "completed_at": datetime.now().isoformat(),
+        }
+        save_state(project_dir, state)
+        return state
+
     # Save state before prompting (Ctrl-C safe)
     save_state(project_dir, state)
 

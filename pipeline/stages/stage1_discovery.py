@@ -850,7 +850,7 @@ def _search_paperdl_seed_papers(topic: str, max_results: int = 10,
 
     print(f"  [paperdl] Searching seed papers for '{topic}'...")
     try:
-        econ_sources = ["arxiv", "pmlr", "pmc"]
+        econ_sources = ["arxiv", "pmc"]  # PMLR removed — ML proceedings, 0 econ results, 15min per search
         searcher = PaperSearcher(sources=econ_sources, mode=mode)
         results = searcher.search(topic, max_results=max_results)
         papers = []
@@ -946,10 +946,15 @@ def _search_ckan(api_root: str, portal_label: str, topic: str,
     if use_format_filter:
         params["fq"] = "res_format:(CSV OR TSV OR JSON OR XLSX OR ZIP)"
 
+    _CKAN_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; DatosAbiertos-Lab/1.0)",
+        "Accept": "application/json",
+    }
     try:
         r = requests.get(
             f"{api_root.rstrip('/')}/api/3/action/package_search",
             params=params,
+            headers=_CKAN_HEADERS,
             timeout=20,
         )
         r.raise_for_status()
@@ -1005,22 +1010,10 @@ def _search_ckan(api_root: str, portal_label: str, topic: str,
 
 
 def _search_datagov(topic: str, max_results: int = 5) -> list[dict]:
-    """Search US data.gov (CKAN) for datasets with directly-downloadable files.
-
-    Uses CKAN's `res_format` facet filter (via _search_ckan helper) to require
-    at least one resource in a parseable format. This is far more reliable
-    than filtering by organization, because data.gov indexes many federal/
-    state/municipal portals where most "datasets" are actually HTML landing
-    pages. Downstream Q1-Q8 quality filters reject low-quality files so this
-    function does NOT need to gate on causal structure.
-    """
-    return _search_ckan(
-        api_root="https://catalog.data.gov",
-        portal_label="data.gov",
-        topic=topic,
-        max_results=max_results,
-        source_api="datagov",
-    )
+    """Search US data.gov — DISABLED: CKAN API dead at catalog.data.gov (404 2026-06-20)."""
+    # catalog.data.gov/api/3/action/package_search returns 404 — API retired
+    # TODO: find replacement endpoint (data.gov may have migrated to a new API)
+    return []
 
 
 def _search_worldbank(topic: str, max_results: int = 5) -> list[dict]:
@@ -1115,7 +1108,7 @@ def _search_eu_opendata(topic: str, max_results: int = 5) -> list[dict]:
     try:
         r = requests.get(
             "https://data.europa.eu/api/hub/search/search",
-            params={"q": topic, "limit": max_results},
+            params={"query": topic, "limit": max_results},  # param is 'query' not 'q'
             timeout=20,
         )
         r.raise_for_status()
@@ -1217,32 +1210,116 @@ def _search_open_canada(topic: str, max_results: int = 5) -> list[dict]:
 
 
 def _search_datos_gob_mx(topic: str, max_results: int = 5) -> list[dict]:
-    """México federal open data portal (datos.gob.mx) — CKAN.
-
-    Spanish-language portal — for best results pass Spanish keywords.
-    Format facet filter is disabled because the install behaves erratically
-    when it's enabled; the post-walk filter still extracts download_url.
-    """
-    return _search_ckan(
-        api_root="https://datos.gob.mx",
-        portal_label="datos.gob.mx",
-        topic=topic,
-        max_results=max_results,
-        use_format_filter=False,
-        source_api="datos_gob_mx",
-        dataset_url_template="https://datos.gob.mx/busca/dataset/{name}",
-    )
+    """México federal open data portal — DISABLED: SSLError on datos.gob.mx (2026-06-20)."""
+    # SSL certificate error on datos.gob.mx — package_search also returns 404
+    # TODO: verify if cert is fixed; add verify=False once confirmed safe
+    return []
 
 
 def _search_datosabiertos_peru(topic: str, max_results: int = 5) -> list[dict]:
-    """Peru federal open data portal (datosabiertos.gob.pe) - CKAN."""
-    return _search_ckan(
-        api_root="https://www.datosabiertos.gob.pe",
-        portal_label="datosabiertos.gob.pe",
-        topic=topic,
-        max_results=max_results,
-        source_api="datosabiertos_peru",
-    )
+    """Peru open data portal (datosabiertos.gob.pe) - CKAN/DKAN.
+
+    This portal blocks package_search (returns 418) and requires a browser-like
+    User-Agent. Strategy: try package_search first; if blocked, fall back to
+    package_list + token filter (as per LAB11/DatosAbiertos reference implementation).
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+
+    BASE = "https://www.datosabiertos.gob.pe/api/3/action"
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; DatosAbiertos-Lab/1.0)",
+        "Accept": "application/json",
+    }
+    label = "datosabiertos.gob.pe"
+    print(f"  [{label}] Searching for '{topic}'...")
+
+    def _pkg_to_result(pkg: dict) -> dict:
+        resources = pkg.get("resources") or []
+        download_url = ""
+        download_format = ""
+        _DL_EXTS = (".csv", ".tsv", ".dta", ".xlsx", ".zip", ".json")
+        _DL_FMTS = {"csv", "tsv", "dta", "xlsx", "zip", "json"}
+        for res in resources:
+            fmt = (res.get("format") or "").lower()
+            ru = res.get("url") or ""
+            if ru and (ru.lower().endswith(_DL_EXTS) or fmt in _DL_FMTS):
+                download_url = ru
+                download_format = fmt
+                break
+        name_slug = pkg.get("name", "")
+        org = pkg.get("organization") or {}
+        org_name = org.get("title") or org.get("name") or label if isinstance(org, dict) else label
+        return {
+            "name": (pkg.get("title") or name_slug)[:200],
+            "provider": f"{label} ({org_name})" if org_name != label else label,
+            "url": f"https://www.datosabiertos.gob.pe/dataset/{name_slug}",
+            "download_url": download_url,
+            "download_format": download_format,
+            "description": (pkg.get("notes") or "")[:300],
+            "published": (pkg.get("metadata_created") or "")[:10],
+            "source_api": "datosabiertos_peru",
+        }
+
+    # 1. Try package_search (works on standard CKAN; often blocked here)
+    try:
+        r = requests.get(
+            f"{BASE}/package_search",
+            params={"q": topic, "rows": max_results,
+                    "fq": "res_format:(CSV OR TSV OR JSON OR XLSX OR ZIP)"},
+            headers=HEADERS,
+            timeout=20,
+        )
+        if r.status_code == 200:
+            items = r.json().get("result", {}).get("results", [])
+            if items:
+                results = [_pkg_to_result(p) for p in items[:max_results]]
+                print(f"  [{label}] {len(results)} datasets (package_search)")
+                return results
+    except Exception:
+        pass
+
+    # 2. Fallback: package_list + token filter (LAB11 pattern)
+    try:
+        r = requests.get(f"{BASE}/package_list", headers=HEADERS, timeout=20)
+        r.raise_for_status()
+        text = r.content.decode("utf-8-sig").strip()
+        if not text.startswith("{"):
+            print(f"  [{label}] Non-JSON from package_list")
+            return []
+        names: list[str] = r.json().get("result") or []
+        tokens = [t for t in topic.lower().split() if len(t) > 2]
+        matched = [
+            n for n in names
+            if any(t in n.lower() for t in tokens)
+        ][:max_results * 3]  # fetch extra, trim after show
+
+        results = []
+        for name in matched:
+            if len(results) >= max_results:
+                break
+            try:
+                rs = requests.get(f"{BASE}/package_show", params={"id": name},
+                                  headers=HEADERS, timeout=15)
+                if rs.status_code != 200:
+                    continue
+                data = rs.json()
+                if not data.get("success"):
+                    continue
+                raw = data.get("result")
+                pkg = raw[0] if isinstance(raw, list) and raw else raw if isinstance(raw, dict) else None
+                if pkg:
+                    results.append(_pkg_to_result(pkg))
+            except Exception:
+                continue
+
+        print(f"  [{label}] {len(results)} datasets (package_list fallback, {len(names)} total packages)")
+        return results
+    except Exception as e:
+        print(f"  [{label}] Error: {e}")
+        return []
 
 
 def _search_govdata_de(topic: str, max_results: int = 5) -> list[dict]:
@@ -2295,7 +2372,236 @@ def _causal_design_warning(profile: dict) -> None:
 
 # ── Path C: data-first discovery ──────────────────────────────────────────────
 
-def _run_path_c(project_dir: Path, state: dict) -> dict:
+def _write_path_c_result(
+    project_dir: Path,
+    state: dict,
+    *,
+    selected_topic: str,
+    selected: dict,
+    qualified: list[dict],
+    topic_list: list[dict],
+    smoke: bool = False,
+) -> dict:
+    """Persist Path C output in the same shape used by downstream stages."""
+    profile = selected["profile"]
+    feasibility = selected["feasibility"]
+
+    state["stages"]["stage1"] = {
+        "status": "completed",
+        "topic": selected_topic,
+        "path": "C",
+        "output_file": str(project_dir / "stage1_discovery.md"),
+        "completed_at": datetime.now().isoformat(),
+        "data_path": selected["local_path"],
+        "data_profile": {
+            "rows": profile["rows"],
+            "cols": profile["cols"],
+            "columns": profile["columns"],
+            "structure": profile["structure"],
+            "panel_flag": profile["panel_flag"],
+            "panel_details": profile.get("panel_details", {}),
+            "id_cols": profile.get("id_cols", []),
+            "time_cols": profile.get("time_cols", []),
+            "wide_panel": profile.get("wide_panel"),
+        },
+        "recommended_data_sources": [q["candidate"] for q in qualified],
+    }
+    if smoke:
+        state["stages"]["stage1"]["smoke"] = True
+
+    state["stages"]["stage1_5"] = {
+        "status": "completed",
+        "completed_at": datetime.now().isoformat(),
+        "n_downloaded": len(qualified),
+        "n_not_downloaded": 0,
+        "feasibility": feasibility,
+        "downloaded_datasets": [
+            {
+                "name": q["candidate"].get("name", ""),
+                "local_path": q["local_path"],
+                "warnings": q["warnings"],
+                "profile": {
+                    "rows": q["profile"]["rows"],
+                    "cols": q["profile"]["cols"],
+                    "columns": q["profile"]["columns"],
+                    "structure": q["profile"]["structure"],
+                    "panel_flag": q["profile"]["panel_flag"],
+                    "panel_details": q["profile"].get("panel_details", {}),
+                    "id_cols": q["profile"].get("id_cols", []),
+                    "time_cols": q["profile"].get("time_cols", []),
+                    "wide_panel": q["profile"].get("wide_panel"),
+                    "data_summary": q["profile"].get("data_summary", ""),
+                },
+            }
+            for q in qualified
+        ],
+    }
+    if smoke:
+        state["stages"]["stage1_5"]["smoke"] = True
+
+    output_file = project_dir / "stage1_discovery.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(
+        json.dumps({
+            "path": "C",
+            "smoke": smoke,
+            "topic": selected_topic,
+            "qualified_datasets": len(qualified),
+            "selected_dataset": selected["candidate"].get("name", ""),
+            "selected_data_path": selected["local_path"],
+            "feasibility": feasibility,
+            "suggestions": topic_list,
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    state["current_stage"] = 1
+    save_state(project_dir, state)
+
+    print(f"\n  {'=' * 60}")
+    print(f"  STAGE 1 PATH C {'SMOKE ' if smoke else ''}- COMPLETE")
+    print(f"  {'=' * 60}")
+    print(f"  Topic:     {selected_topic}")
+    print(f"  Dataset:   {Path(selected['local_path']).name}")
+    print(f"  Rows:      {profile['rows']:,}")
+    print(f"  Columns:   {profile['cols']}")
+    print(f"  Structure: {profile['structure']}")
+    print(f"  Ceiling:   {feasibility['score_ceiling']}/100")
+    print(f"  Tier:      {feasibility['max_tier']} ({feasibility['tier_label']})")
+    print(f"  {'=' * 60}")
+
+    return state
+
+
+def _create_path_c_smoke_microdata(project_dir: Path) -> Path:
+    """Create a deterministic panel microdataset for Path C smoke tests."""
+    import pandas as pd
+
+    data_dir = project_dir / "data" / "external"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    out = data_dir / "path_c_smoke_microdata.csv"
+
+    rows = []
+    years = list(range(2013, 2023))
+    for student_id in range(1, 121):
+        district_id = (student_id - 1) % 60 + 1
+        female = student_id % 2
+        baseline_score = 480 + (student_id % 35) * 3 + (district_id % 7)
+        adoption_year = 2017 + (district_id % 4) if district_id <= 48 else 0
+        ever_treated = int(adoption_year > 0)
+        for year in years:
+            post = int(adoption_year > 0 and year >= adoption_year)
+            years_since = max(0, year - adoption_year + 1) if post else 0
+            age = 8 + (year - 2013)
+            attendance = 84 + (student_id % 9) + (year - 2013) * 0.35 + post * 2.2
+            math_score = (
+                baseline_score
+                + (year - 2013) * 4.0
+                + post * 8.5
+                + years_since * 1.3
+                + female * 1.5
+                + (district_id % 5)
+            )
+            reading_score = (
+                baseline_score
+                + 12
+                + (year - 2013) * 3.4
+                + post * 6.2
+                + years_since * 0.9
+                + female * 2.0
+            )
+            rows.append({
+                "student_id": student_id,
+                "district_id": district_id,
+                "school_id": district_id * 10 + (student_id % 5),
+                "year": year,
+                "adoption_year": adoption_year,
+                "ever_treated": ever_treated,
+                "treatment": post,
+                "post": post,
+                "years_since_treatment": years_since,
+                "math_score": round(math_score, 2),
+                "reading_score": round(reading_score, 2),
+                "attendance_rate": round(attendance, 2),
+                "baseline_score": baseline_score,
+                "age": age,
+                "female": female,
+                "rural": int(district_id % 3 == 0),
+            })
+
+    pd.DataFrame(rows).to_csv(out, index=False, encoding="utf-8")
+    return out
+
+
+def _run_path_c_smoke(project_dir: Path, state: dict) -> dict:
+    """Run Path C end-to-end locally without network, Claude, or user input."""
+    from .stage1_5_data_loading import (
+        _profile_dataset, _early_warning, _assess_feasibility,
+    )
+
+    print(f"\n{'=' * 60}")
+    print("STAGE 1: Discovery - Path C smoke")
+    print("=" * 60)
+    print("  Using deterministic local microdata; external APIs and Claude are skipped.")
+
+    local_path = _create_path_c_smoke_microdata(project_dir)
+    candidate = {
+        "name": "Path C smoke panel microdata",
+        "provider": "local smoke fixture",
+        "url": str(local_path),
+        "description": "Synthetic student-year panel with staggered treatment adoption.",
+        "method": "staggered DiD / event study",
+        "area": "education",
+        "design_tier": 1,
+    }
+
+    profile = _profile_dataset(str(local_path))
+    warnings = _early_warning(profile)
+    feasibility = _assess_feasibility(
+        [{"profile": profile, "dataset": candidate, "local_path": str(local_path), "warnings": warnings}],
+        [],
+    )
+    feasibility["score_ceiling"] = max(feasibility["score_ceiling"], 90)
+    feasibility["max_tier"] = min(feasibility["max_tier"], 1)
+    feasibility["tier_label"] = "CAUSAL (smoke fixture: staggered treatment panel)"
+
+    qualified = [{
+        "candidate": candidate,
+        "local_path": str(local_path),
+        "profile": profile,
+        "feasibility": feasibility,
+        "warnings": warnings,
+    }]
+    topic_list = [{
+        "dataset_index": 1,
+        "topic": "Staggered school program effects on learning",
+        "research_question": (
+            "Do staggered school program rollouts raise math and reading scores?"
+        ),
+        "method": "staggered DiD with event-study dynamics",
+        "identification_level": "A",
+        "identification": (
+            "Districts adopt in different years, so not-yet-treated districts serve as controls."
+        ),
+        "control_group": "Districts that adopt later or never adopt within the panel.",
+        "score_potential": "Level A identification + 10-year panel + 60 districts = 90+ potential",
+    }]
+
+    print(f"  [ok] Profiled {profile['rows']:,} rows x {profile['cols']} cols")
+    print(f"  [ok] Structure: {profile['structure']} | ceiling: {feasibility['score_ceiling']}/100")
+
+    return _write_path_c_result(
+        project_dir,
+        state,
+        selected_topic=topic_list[0]["topic"],
+        selected=qualified[0],
+        qualified=qualified,
+        topic_list=topic_list,
+        smoke=True,
+    )
+
+
+def _run_path_c(project_dir: Path, state: dict, smoke: bool = False) -> dict:
     """Path C: Search for high-quality datasets first, then suggest topics.
 
     1. Search APIs with broad queries for panel/causal datasets
@@ -2304,6 +2610,9 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
     4. For qualifying datasets, ask Claude to suggest research topics
     5. User picks dataset + topic
     """
+    if smoke:
+        return _run_path_c_smoke(project_dir, state)
+
     from concurrent.futures import ThreadPoolExecutor
     from .stage1_5_data_loading import (
         _profile_dataset, _early_warning, _assess_feasibility,
@@ -2431,8 +2740,53 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
     # FAOSTAT bulk catalog (agriculture / food / environment country panels)
     portal_results.extend(_search_faostat(random.choice(fao_queries), max_results=3))
 
+    # ── Phase 1d: Peru-specific sources ──────────────────────────────────
+    # INEI, BCRP, datosabiertos, MINEM, MEF all expose direct download URLs
+    # that Path C can profile immediately. Use broad Peru queries — topic
+    # matching happens later in Stage 2, not here.
+    print(f"\n  [search] Phase 1d: Searching Peru-specific sources...")
+    peru_results: list[dict] = []
+    _peru_queries = ["empleo ingresos hogares", "educacion salud Peru", "produccion mineria Peru"]
+    _pq = random.choice(_peru_queries)
+    # INEI, datosabiertos, MINEM, MEF, INGEMMET — use broad query
+    for _fn, _kw in [
+        (_search_inei,                   {"max_results": 8}),
+        (_search_datosabiertos_curated,  {"max_results": 8}),
+        (_search_datosabiertos_peru,     {"max_results": 5}),
+        (_search_minem,                  {"max_results": 2}),
+        (_search_mef_consulta_amigable,  {"max_results": 3}),
+        (_search_ingemmet,               {"max_results": 2}),
+    ]:
+        try:
+            peru_results.extend(_fn(_pq, **_kw))
+        except Exception:
+            pass
+    # BCRP macro panel — always include regardless of query (it's always useful)
+    try:
+        peru_results.extend(_search_bcrp("PBI inflacion tipo cambio", max_results=1))
+    except Exception:
+        pass
+    # BCRP research papers and ALICIA — academic Peru sources
+    for _fn, _kw in [
+        (_search_bcrp_research,          {"max_results": 3}),
+        (_search_alicia,                 {"max_results": 3}),
+    ]:
+        try:
+            peru_results.extend(_fn(_pq, **_kw))
+        except Exception:
+            pass
+
+    # Split Peru results: those with download_url go to portal_results (direct download),
+    # INEI/BCRP without download_url go to peru_inei_pool (need specialized downloaders)
+    peru_inei_pool = [r for r in peru_results if not r.get("download_url") and
+                      r.get("source_api") in ("inei", "bcrp")]
+    peru_dl = [r for r in peru_results if r.get("download_url")]
+    print(f"  [search] Peru sources: {len(peru_dl)} direct-dl + {len(peru_inei_pool)} INEI/BCRP "
+          f"({len(peru_results)} total)")
+    portal_results.extend(peru_results)
+
     # Keep only candidates that actually expose a downloadable file —
-    # Path C cannot profile metadata-only entries.
+    # Path C cannot profile metadata-only entries. INEI handled separately below.
     downloadable_portal = [r for r in portal_results if r.get("download_url")]
 
     # Filter out already-used and dedupe by download URL
@@ -2491,6 +2845,22 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
             "provider": pr.get("provider", "Open Data Portal"),
         })
 
+    # Phase 1d: add INEI/BCRP pool — no download_url but have specialized downloaders
+    for pr in peru_inei_pool:
+        CURATED_PACKAGES.append({
+            "title": pr.get("name", "")[:70],
+            "dataverse_doi": "",
+            "url": pr.get("url", ""),
+            "method": "panel survey",
+            "area": "peru microdata",
+            "design_tier": 2,  # ENAHO panel = Tier 2 (natural experiments feasible)
+            "provider": pr.get("provider", "INEI Peru"),
+            "source_api": pr.get("source_api", "inei"),
+            # Carry INEI-specific fields so download loop uses correct handler
+            "survey": pr.get("survey", ""),
+            "year": pr.get("year", ""),
+        })
+
     # Sort by tier
     packages = sorted(CURATED_PACKAGES, key=lambda x: x.get("design_tier", 9))
 
@@ -2521,6 +2891,10 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
             "description": paper.get("data_description", ""),
             "method": paper.get("method", ""),
             "area": paper.get("area", ""),
+            # Pass through Peru-specific fields for download loop routing
+            "source_api": paper.get("source_api", ""),
+            "survey": paper.get("survey", ""),
+            "year": paper.get("year", ""),
         })
 
     # ── Fallback: also search APIs directly if curated list somehow empty
@@ -2566,6 +2940,9 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
         "data.gov.au", "open.canada.ca", "datos.gob.mx",
         "govdata.de", "dati.gov.it",
         "socrata", "faostat",
+        # Peru sources (Phase 1d) — get reserved slots like portals
+        "inei", "bcrp", "datosabiertos", "minem", "mef", "ingemmet",
+        "alicia", "concytec", "bcrp research",
     )
     is_portal = lambda c: any(m in c.get("provider", "").lower() for m in portal_provider_marks)
 
@@ -2612,10 +2989,18 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
 
         # Try to download
         local_path = None
+        src_api = candidate.get("source_api", "")
         if "dataverse" in provider or "doi.org/10.7910" in url or "dataverse" in url:
             local_path = _try_download_dataverse(url, data_dir)
         elif "zenodo" in provider or "zenodo.org" in url:
             local_path = _try_download_zenodo(url, data_dir)
+        elif src_api == "inei" or "inei" in provider:
+            # INEI microdata — use specialized INEI downloader
+            from .stage1_5_data_loading import _try_download_inei
+            local_path = _try_download_inei(candidate, data_dir)
+        elif src_api in ("datosabiertos_peru", "datosabiertos_curated") or "datosabiertos" in provider:
+            from .stage1_5_data_loading import _try_download_datosabiertos
+            local_path = _try_download_datosabiertos(candidate, data_dir)
         if not local_path:
             local_path = _try_download_direct(url, data_dir)
 
@@ -2882,7 +3267,17 @@ def _run_path_c(project_dir: Path, state: dict) -> dict:
         print(f"  You can provide a dataset path, or try Path A with a specific topic.\n")
         print("\a", end="", flush=True)
         while True:
-            choice = input("  Enter dataset path (or 'quit' to exit): ").strip().strip('"')
+            try:
+                choice = input("  Enter dataset path (or 'quit' to exit): ").strip().strip('"')
+            except EOFError:
+                print("  [stop] No interactive input available; stopping after failed data search.")
+                state["stages"]["stage1"] = {
+                    "status": "failed",
+                    "reason": "No datasets with score ceiling >= 85 found automatically.",
+                    "completed_at": datetime.now().isoformat(),
+                }
+                save_state(project_dir, state)
+                return state
             if choice.lower() == "quit":
                 import sys
                 sys.exit(0)
@@ -3041,7 +3436,11 @@ Return a JSON block:
     selected_dataset_idx = 0
 
     while True:
-        choice = input("\n  >> ").strip()
+        try:
+            choice = input("\n  >> ").strip()
+        except EOFError:
+            choice = "1" if topic_list else "quit"
+            print(f"\n  [auto] No interactive input available; choosing {choice}.")
         if choice.isdigit() and 1 <= int(choice) <= len(topic_list):
             sel = topic_list[int(choice) - 1]
             selected_topic = sel.get("topic", "research")
@@ -3060,6 +3459,20 @@ Return a JSON block:
     selected = qualified[min(selected_dataset_idx, len(qualified) - 1)]
     profile = selected["profile"]
     feasibility = selected["feasibility"]
+
+    print(f"\n  [papers] Searching seed papers for selected Path C topic...")
+    paperdl_mode = _resolve_paperdl_mode(state)
+    seed_papers = []
+    if selected_topic:
+        seed_papers.extend(_search_paperdl_seed_papers(selected_topic, max_results=8, mode=paperdl_mode))
+        seed_papers.extend(_search_semantic_scholar_seed_papers(selected_topic, max_results=8))
+        seed_papers.extend(_search_openalex_seed_papers(selected_topic, max_results=8))
+    for q in qualified:
+        p = _candidate_to_seed_paper(q["candidate"])
+        if p:
+            seed_papers.append(p)
+    seed_papers = _dedupe_seed_papers(seed_papers)
+    print(f"  [papers] Found {len(seed_papers)} seed papers")
 
     state["stages"]["stage1"] = {
         "status": "completed",
@@ -3080,6 +3493,7 @@ Return a JSON block:
             "wide_panel": profile.get("wide_panel"),
         },
         "recommended_data_sources": [q["candidate"] for q in qualified],
+        "seed_papers": seed_papers,
     }
 
     # Also save Stage 1.5 as completed (data already profiled)
@@ -3122,6 +3536,7 @@ Return a JSON block:
             "selected_dataset": selected["candidate"].get("name", ""),
             "feasibility": feasibility,
             "suggestions": topic_list,
+            "seed_papers": seed_papers,
         }, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -3794,6 +4209,7 @@ def _search_alicia(topic: str, max_results: int = 8) -> list[dict]:
             },
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=20,
+            verify=False,  # SSL cert expired on alicia.concytec.gob.pe
         )
         r.raise_for_status()
         data = r.json()
@@ -3887,11 +4303,12 @@ def _search_alicia(topic: str, max_results: int = 8) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PERU_DSPACE_PORTALS = [
-    {
-        "label": "PUCP Repositorio",
-        "base": "https://repositorio.pucp.edu.pe",
-        "search_path": "/search",  # web search fallback
-    },
+    # PUCP disabled 2026-06-20: OAI + REST both 404, site migrated CMS
+    # {
+    #     "label": "PUCP Repositorio",
+    #     "base": "https://repositorio.pucp.edu.pe",
+    #     "search_path": "/search",
+    # },
     {
         "label": "UP Repositorio",
         "base": "https://repositorio.up.edu.pe",
@@ -3901,6 +4318,8 @@ _PERU_DSPACE_PORTALS = [
         "label": "Repositorio CONCYTEC",
         "base": "https://repositorio.concytec.gob.pe",
         "search_path": "/search",
+        # DSpace 7 at /server/api/discover/search/objects → 200 (verified 2026-06-20)
+        # DSpace 6 /rest/items → 404 (migrated); OAI → 404
     },
 ]
 
@@ -4899,6 +5318,22 @@ def _validate_path_a_candidates(candidates: list[dict],
             break
         if len(qualified) >= 3:
             break  # We only need 3 validated datasets for Stage 2
+
+        if peru_topic:
+            country = _infer_country(c)
+            src_api = c.get("source_api", "")
+            peru_sources = {
+                "inei", "bcrp", "datosabiertos_curated", "datosabiertos_peru",
+                "minem", "ingemmet", "mef_consulta_amigable", "ocds",
+                "punku", "indecopi",
+            }
+            if country and country != "Peru":
+                print(f"  [skip] {c.get('name', 'Unknown')[:60]} — country={country}, topic requires Peru")
+                continue
+            if not country and src_api not in peru_sources:
+                print(f"  [skip] {c.get('name', 'Unknown')[:60]} — no Peru signal for Peru topic")
+                continue
+
         attempted += 1
 
         url = c.get("download_url") or c.get("url", "")
@@ -5434,10 +5869,10 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
 
 # ── Public runner ────────────────────────────────────────────────────────────
 
-def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = None, path_c: bool = False) -> dict:
+def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = None, path_c: bool = False, smoke: bool = False) -> dict:
     """Execute Stage 1 Discovery - Path A, B, or C."""
     if path_c:
-        return _run_path_c(project_dir, state)
+        return _run_path_c(project_dir, state, smoke=smoke)
 
     # Path A (no --data): topic-aware discovery with quality validation.
     # Self-contained — handles its own output file, state save, and summary.

@@ -28,6 +28,13 @@ def ensure_project_dir(project_name: str) -> Path:
     return project_dir
 
 
+def _json_default(obj):
+    """Convert common scientific Python scalars before writing state JSON."""
+    if hasattr(obj, "item"):
+        return obj.item()
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
 def load_state(project_dir: Path) -> dict:
     """Load pipeline state for a project, or return a fresh skeleton.
 
@@ -72,7 +79,7 @@ def save_state(project_dir: Path, state: dict):
     state["updated_at"] = datetime.now().isoformat()
     atomic_write_text(
         project_dir / "pipeline_state.json",
-        json.dumps(state, indent=2, ensure_ascii=False),
+        json.dumps(state, indent=2, ensure_ascii=False, default=_json_default),
     )
 
 

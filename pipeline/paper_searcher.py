@@ -109,9 +109,9 @@ PAPERDL_SOURCE_MAP: dict[str, str] = {
     "biorxiv": "biorxiv",
     "medrxiv": "medrxiv",
     "pmlr": "pmlr",
-    "pmc": "pmc",
-    "pmc_oa": "pmc",
-    "pmcoa": "pmc",
+    "pmc": "pmc_oa",
+    "pmc_oa": "pmc_oa",
+    "pmcoa": "pmc_oa",
 }
 
 # Map source → display label
@@ -131,7 +131,6 @@ SOURCE_LABELS: dict[str, str] = {
 ECON_RELEVANT_SOURCES = [
     "arxiv",           # econ.GN, econ.EM, stat.AP, stat.ME
     "openreview",      # conference papers (sometimes econ-adjacent)
-    "pmlr",            # ML proceedings (causal ML, policy learning)
     "pmc",             # health economics, public health
     "openalex",        # 250M+ works, strong econ/social-science coverage
 ]
@@ -232,7 +231,7 @@ class PaperSearcher:
         papers: list[PaperInfo] = []
 
         # 1. paperdl search (async → sync)
-        paperdl_srcs = [s for s in use_sources if s != "semantic_scholar"]
+        paperdl_srcs = [s for s in use_sources if s not in ("semantic_scholar", "openalex")]
         if paperdl_srcs and self.paperdl_client is not None:
             try:
                 papers.extend(
@@ -434,13 +433,20 @@ def _init_paperdl_client(
         return None
 
     try:
-        client = paperdl.PaperClient(
-            clients=paperdl_names,
-            concurrency=3,
-            show_progress=False,
-            verbose=False,
-            **kwargs,
-        )
+        try:
+            client = paperdl.PaperClient(
+                clients=paperdl_names,
+                search_concurrency=3,
+                **kwargs,
+            )
+        except TypeError:
+            client = paperdl.PaperClient(
+                clients=paperdl_names,
+                concurrency=3,
+                show_progress=False,
+                verbose=False,
+                **kwargs,
+            )
         print(f"  [paperdl] Initialized: {', '.join(SOURCE_LABELS.get(s, s) for s in sources)}")
         return client
     except Exception as exc:
@@ -458,10 +464,14 @@ async def _search_paperdl(
     results: list[PaperInfo] = []
 
     async with client:
+        paperdl_clients = (
+            [PAPERDL_SOURCE_MAP.get(s, s) for s in sources]
+            if sources is not None else None
+        )
         raw_results = await client.search(
             query,
             total_results=max_results,
-            clients=sources,
+            clients=paperdl_clients,
             deduplicate=True,
         )
 

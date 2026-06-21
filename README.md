@@ -213,6 +213,9 @@ python run_pipeline.py --topic "Labor Markets" --data "./panel.csv"
 
 # Path C — Data-first (find the best public datasets, then suggest topics)
 python run_pipeline.py --path-c
+
+# Path C smoke — local microdata, no APIs/Claude/input; stops after Stage 1
+python run_pipeline.py --path-c --smoke --to-stage 1 --project path_c_smoke
 ```
 
 ### Replication mode (student assignment / HTE extension) `[beta]`
@@ -454,7 +457,7 @@ Each stage records its result under `stages.stage<N>` with at minimum a `status`
 ## Limitations
 
 - **Windows is the primary tested platform.** `os.replace()` atomicity assumes the project directory and the system tempdir live on the same volume — fine on a local disk, not guaranteed on a network share.
-- **Path C is partially implemented.** The flag is wired through but Stage 1 does not yet branch on it; treat it as experimental.
+- **Path C is experimental but implemented.** Stage 1 branches into data-first discovery, downloads/profiles candidates, and can be smoke-tested locally with `--path-c --smoke --to-stage 1`.
 - **Stage 6 R&R has no escalation.** After 3 rounds the paper is marked incomplete; there is no automatic fallback to a less ambitious target.
 - **Method classification is keyword-based.** The identification tier in Stage 4a relies on string matching ("did", "iv", "rdd"). Misspelled or non-standard method names may be misclassified — keep your strategy memo terminology canonical.
 - **No retry/backoff on Semantic Scholar.** Stage 3 uses a 15s timeout but no retry logic; rate-limited responses cause the literature step to fail soft and proceed.

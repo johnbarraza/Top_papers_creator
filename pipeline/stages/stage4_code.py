@@ -351,12 +351,16 @@ def run(project_dir: Path, state: dict) -> dict:
         data_preview = ""
         try:
             import pandas as _pd_prev
-            # Find the primary dataset from Stage 1.5
-            stage1_5 = state["stages"].get("stage1_5", {})
-            datasets = stage1_5.get("downloaded_datasets", []) or []
-            if datasets:
-                ds0 = datasets[0]
-                lp = ds0.get("local_path", "")
+            # Use the exact dataset validated in Stage 3.3 when available.
+            lp = (
+                state["stages"].get("stage3_3", {}).get("analysis_data_path")
+                or state["stages"].get("stage1", {}).get("data_path", "")
+            )
+            if not lp:
+                stage1_5 = state["stages"].get("stage1_5", {})
+                datasets = stage1_5.get("downloaded_datasets", []) or []
+                lp = datasets[0].get("local_path", "") if datasets else ""
+            if lp:
                 if lp and Path(lp).exists():
                     ext = Path(lp).suffix.lower()
                     try:

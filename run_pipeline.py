@@ -46,7 +46,7 @@ def print_status(project_dir):
 
     for stage_num in STAGE_ORDER:
         name = STAGE_NAMES[stage_num]
-        key = f"stage{stage_num}"
+        key = f"stage{stage_num}".replace(".", "_")
         info = state.get("stages", {}).get(key, {})
         status = info.get("status", "pending")
         icon = "[x]" if status == "completed" else "[ ]"
@@ -90,6 +90,10 @@ def main():
     )
     parser.add_argument("--topic", type=str, help="Research topic for Stage 1")
     parser.add_argument("--data", type=str, help="Path or URL to user dataset (Path B)")
+    parser.add_argument("--path-c", action="store_true",
+                        help="Data-first search: find strong datasets first, then suggest topics")
+    parser.add_argument("--smoke", action="store_true",
+                        help="Run a deterministic local smoke test (currently implemented for --path-c Stage 1)")
     parser.add_argument("--project", type=str, help="Project name (default: auto-generated)")
     parser.add_argument("--from-stage", type=float, default=1,
                         help="Start from a specific stage (e.g. 1, 2, 2.5, 3, 3.5, 4)")
@@ -123,7 +127,7 @@ def main():
         parser.error(f"--to-stage must be one of {STAGE_ORDER}")
 
     # ── Interactive setup (when starting from Stage 1 without --topic) ──
-    if args.from_stage == 1 and not args.topic:
+    if args.from_stage == 1 and not args.topic and not args.path_c:
         print()
         print("=" * 60)
         print("  PAPERS-HQ v2 - Automated Academic Paper Pipeline")
@@ -187,6 +191,8 @@ def main():
     # ── Validate topic for Stage 1 ────────────────────────────────────────
     if args.from_stage == 1 and not args.topic and not args.path_c:
         parser.error("--topic is required when starting from Stage 1 (or run without --topic for interactive mode)")
+    if args.smoke and not args.path_c:
+        parser.error("--smoke currently requires --path-c")
 
     # ── Project name ─────────────────────────────────────────────────────
     if args.project:
@@ -215,6 +221,8 @@ def main():
         state["data_path"] = args.data
     if args.path_c:
         state["path_c"] = True
+    if args.smoke:
+        state.setdefault("config", {})["smoke"] = True
     state.setdefault("config", {})["stage2_mode"] = args.mode
     state.setdefault("config", {})["paperdl"] = args.paperdl
     state.setdefault("config", {})["notebooklm"] = args.notebooklm
@@ -254,9 +262,13 @@ def main():
         state = stage4_code.run(project_dir, state)
         return state
 
+    def _stage1_topic():
+        """Preserve the original topic when a later-stage loop returns to Stage 1."""
+        return args.topic or state.get("stages", {}).get("stage1", {}).get("topic")
+
     # ── Stage dispatch table ─────────────────────────────────────────────
     stage_runners = {
-        1:   lambda: (_stage_header(1),   stage1_discovery.run(project_dir, args.topic, state, data_path=args.data, path_c=args.path_c))[-1],
+        1:   lambda: (_stage_header(1),   stage1_discovery.run(project_dir, _stage1_topic(), state, data_path=args.data, path_c=args.path_c, smoke=args.smoke))[-1],
         1.5: lambda: (_stage_header(1.5), stage1_5_data_loading.run(project_dir, state))[-1],
         2:   lambda: (_stage_header(2),   stage2_ideation.run(project_dir, state))[-1],
         2.5: lambda: (_stage_header(2.5), stage2_5_selection.run(project_dir, state))[-1],
@@ -321,6 +333,14 @@ def main():
                 if s33.get("action") == "retry_idea":
                     print(f"\n  [loop] Quick test failed. Returning to Stage 2.5.")
                     stage_idx = STAGE_ORDER.index(2.5)
+                    continue
+                if s33.get("action") == "regenerate_ideas":
+                    print(f"\n  [loop] Quick test found a dataset mismatch. Regenerating Stage 2 ideas.")
+                    stage_idx = STAGE_ORDER.index(2)
+                    continue
+                if s33.get("action") == "rediscover_data":
+                    print(f"\n  [loop] Selected idea does not match downloaded data. Returning to Stage 1.")
+                    stage_idx = STAGE_ORDER.index(1)
                     continue
 
             # Handle REJECT in Stage 3.5 — loop back to Stage 2.5

@@ -213,10 +213,10 @@ def _collect_replication_candidates(project_dir: Path, state: dict) -> list[dict
     topic = stage1.get("selected_variant") or stage1.get("topic", "")
     mode = _resolve_mode(state)
 
-    # ── paperdl search (multi-source: arXiv, PMLR, PMC) ──
+    # ── paperdl search (multi-source: arXiv, PMC) ──
     if topic and mode != "off" and is_paperdl_available():
         try:
-            econ_sources = ["arxiv", "pmlr", "pmc"]
+            econ_sources = ["arxiv", "pmc"]  # PMLR removed — ML proceedings, 0 econ results, 15min per search
             searcher = PaperSearcher(sources=econ_sources, mode=mode)
             paperdl_results = searcher.search(topic, max_results=10)
             print(f"  [paperdl] Found {len(paperdl_results)} replication candidates")
@@ -856,7 +856,10 @@ def _run_ideation_normal(project_dir: Path, state: dict) -> dict:
         sources_context += (
             "These datasets have been downloaded and profiled. "
             "Your ideas MUST use variables that ACTUALLY EXIST in these datasets. "
-            "For each idea, specify WHICH dataset and WHICH variables it uses.\n\n"
+            "For each idea, specify WHICH exact dataset file and WHICH exact "
+            "variables it uses. Do NOT name an external dataset unless it is "
+            "listed here as downloaded, or explicitly mark it as required "
+            "external data not yet available.\n\n"
         )
         for i, ds in enumerate(downloaded_datasets, 1):
             profile = ds.get("profile", {})
@@ -1332,6 +1335,31 @@ HARD CONSTRAINTS on what methods are feasible:
 *** an ambitious but flawed Tier 1 design that referees will destroy. ***
 """
 
+    prior_rejections = state["stages"].get("stage2", {}).get("rejected_ideas", [])
+    rejection_block = ""
+    if prior_rejections:
+        lines = []
+        for idx, rejected in enumerate(prior_rejections[-5:], 1):
+            flags = rejected.get("flags", [])
+            flags_text = "; ".join(str(f) for f in flags[:5])
+            lines.append(
+                f"{idx}. {rejected.get('title', 'Untitled idea')} "
+                f"({rejected.get('method', 'unknown method')})\n"
+                f"   Failed because: {flags_text}"
+            )
+        rejection_block = f"""
+## *** PREVIOUS IDEA-DATASET FAILURES TO AVOID ***
+
+Stage 3.3 already rejected the following idea/data matches. Do NOT regenerate
+near-duplicates, and do NOT require variables, rollout dates, panel structure, or
+treatment definitions that caused these failures:
+
+{chr(10).join(lines)}
+
+*** Treat these as hard negative examples. New ideas must use variables and
+structure that actually exist in the loaded dataset. ***
+"""
+
     prompt = f"""You are a bold but REALISTIC research advisor (Junshi). Your task:
 
 RESEARCH AREA: {topic}
@@ -1407,6 +1435,7 @@ HARD RULES:
 {identification_guidance}
 {power_warning}
 {feasibility_block}
+{rejection_block}
 {panel_enforcement}
 {data_context}
 {sources_context}
@@ -1473,6 +1502,8 @@ IMPORTANT: At the end, output a JSON block:
       "title": "...",
       "research_question": "...",
       "method": "DiD with continuous treatment intensity",
+      "dataset_file": "exact downloaded filename.csv",
+      "required_variables": ["exact_treatment_col", "exact_outcome_col", "exact_id_col", "exact_time_col"],
       "identification_level": "B",
       "identification_source": "Pre-determined English proficiency creates differential treatment intensity",
       "sub_topic": "informality",
@@ -1496,11 +1527,14 @@ IMPORTANT: At the end, output a JSON block:
     response = run_claude(prompt, model=p["model"], effort=p["effort"], output_file=output_file)
     ideas_data = extract_json(response)
 
+    previous_rejections = state["stages"].get("stage2", {}).get("rejected_ideas", [])
     state["stages"]["stage2"] = {
         "status": "completed",
         "output_file": str(output_file),
         "completed_at": datetime.now().isoformat(),
     }
+    if previous_rejections:
+        state["stages"]["stage2"]["rejected_ideas"] = previous_rejections
 
     if ideas_data and "top_ideas" in ideas_data:
         state["stages"]["stage2"]["top_ideas"] = ideas_data["top_ideas"]
