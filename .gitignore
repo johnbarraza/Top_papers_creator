@@ -11,13 +11,8 @@ __pycache__/
 # Firecrawl local cache
 .firecrawl/
 
-# Pipeline outputs — exclude all project runs except mining base
-# (mining_canon pipeline_state.json gives Path A/C dedup a reference point on fresh clones)
-projects/*
-!projects/mining_canon_and_local_development_in_peru_20260530_121243
-projects/mining_canon_and_local_development_in_peru_20260530_121243/data/
-projects/mining_canon_and_local_development_in_peru_20260530_121243/quality_reports/
-projects/mining_canon_and_local_development_in_peru_20260530_121243/paper/figures/
+# Pipeline outputs (user-generated, not part of the tool)
+projects/
 
 # Downloaded external data
 data/external/
