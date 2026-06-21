@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\caption{Heterogeneous Treatment Effects (IV)}
+\label{tab:heterogeneity}
+\begin{tabular}{l ccccc}
+\toprule
+Interaction & Estimate & SE & 95\% CI & $p$-value & N \\
+\midrule
+\multicolumn{6}{l}{\textit{$\times$ GENERO}} \\
+  TIENE_BILLETERA & 0.0000** & (0.0000) & [0.0000, 0.0000] & 0.0487 & 106619 \\
+  USA_BILLETERA & 0.0000 & (0.0000) & [-0.0000, 0.0000] & 0.1133 & 106619 \\
+\addlinespace
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item \textit{Notes:} IV/2SLS estimates with treatment $\times$ moderator interactions. Instruments: $Z$ and $Z \times$ moderator. HC1 robust SEs in parentheses. $^{***}$p$<$0.01, $^{**}$p$<$0.05, $^{*}$p$<$0.10.
+\end{tablenotes}
+\end{table}
