@@ -7,7 +7,7 @@
 [![Powered by Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-D97757)](https://claude.ai/code)
 [![Runs on Antigravity](https://img.shields.io/badge/Runs%20on-Google%20Antigravity-4285F4)](https://antigravity.google/)
 
-> **This is a fork of [jnichor/Top_papers_creator](https://github.com/jnichor/Top_papers_creator).** Additions in this fork: full `requirements.txt`, expanded public-data sources (PUCP, CONCYTEC, UP DSpace), corrected installation guide, and replication-mode beta label.
+> **This is a fork of [jnichor/Top_papers_creator](https://github.com/jnichor/Top_papers_creator).** Additions in this fork: full `requirements.txt`, expanded public-data sources (PUCP, CONCYTEC, UP DSpace), corrected installation guide, replication-mode beta label, a **macro track** for general-equilibrium papers (HANK, TANK, Aiyagari, Huggett) with equilibrium tests and journal-targeted literature search, an optional **Lean formalization** stage, and pinned current Claude models.
 
 A hybrid AI–human research pipeline that takes you from a research idea to a submission-ready paper. Claude handles reasoning (ideation, validation, writing, review); Python handles execution (data loading, code generation, statistics, LaTeX compilation). State is persisted between stages so you can stop, resume, or rerun any stage at will.
 
@@ -16,7 +16,13 @@ The pipeline is built on top of the [Claude Code](https://claude.ai/code) CLI an
 
 ## Pipeline at a glance
 
-7 core stages plus 2 human checkpoints:
+One orchestrator, two paper types: **empirical** (identification-first: DiD, IV, RDD, RCT, HTE — the default) and **macro** (model-based general equilibrium, `--paper-type macro`). Both run the same stages and checkpoints; the content of each stage changes with the paper type.
+
+<p align="center">
+  <img src="docs/pipeline_tracks.svg" alt="Papers-HQ pipeline: empirical and macro tracks across Stages 1-7, with human checkpoints at 2.5 and 3.5, the macro equilibrium gate at Stage 4 and the optional Lean stage 5.5" width="100%">
+</p>
+
+7 core stages plus 2 human checkpoints (and an optional Lean stage):
 
 | Stage | Name | Type | What it does |
 |---|---|---|---|
@@ -25,13 +31,14 @@ The pipeline is built on top of the [Claude Code](https://claude.ai/code) CLI an
 | 2 | Ideation | Auto | Generates 8–10 research ideas ranked by novelty × feasibility × impact |
 | 2.5 | Idea Selection | Human | You pick 1 of the top 3 ideas, or reject all and re-ideate |
 | 3 | Validation | Auto | 8-step evaluation collapsed into 4 calls; literature review via Semantic Scholar |
-| 3.3 | Quick Empirical Test | Auto | Pre-trends, permutation, magnitude checks — fail-fast before code generation |
+| 3.3 | Quick Empirical Test | Auto | Pre-trends, permutation, magnitude checks — fail-fast before code generation (macro: model smoke test) |
 | 3.5 | Strategy Review | Human | You approve the identification strategy or loop back |
 | 3.7 | Referee Preview | Auto | Adversarial referee scan for fatal flaws (selection bias, weak instruments) |
-| 4 | Strategy & Code | Auto | Strategy memo + numbered Python scripts (load → clean → analyze → output) |
+| 4 | Strategy & Code | Auto | Strategy memo + numbered Python scripts (load → clean → analyze → output); macro: HJB-KFE solver + equilibrium tests, stops on any HARD failure |
 | 4.5 | Data Audit | Auto | Validates reproducibility of intermediate data outputs |
 | 4.7 | Code Review | Auto | `review-paper-code` skill + auto-correction loop (max 3 rounds) |
 | 5 | Writing | Auto | Drafts LaTeX paper from results; compiles to PDF |
+| 5.5 | Lean Formalization | Optional | AppliedModelingLib workflow: paper check, then copy the generated folder to `lean/` exactly as generated (`--lean`) |
 | 6 | Peer Review | Auto | `review-paper` skill — 6 parallel agents + R&R loop (max 3 rounds) |
 | 7 | Submission | Auto | Replication audit, integration validation, journal targeting |
 
@@ -245,6 +252,10 @@ For quantitative-macro papers in the style of Kaplan–Moll–Violante or Achdou
 python run_pipeline.py --topic "Monetary policy transmission with liquidity constraints" --paper-type macro
 python run_pipeline.py --topic "Credit crunch and household debt" --paper-type macro --data ./scf_moments.csv
 ```
+
+<p align="center">
+  <img src="docs/macro_equilibrium_tests.svg" alt="Macro track Stage 4: 00_calibration, 01_steady_state, 02_dynamics and 03_output with the HARD and SOFT equilibrium tests each must pass, including Walras' law on the omitted market" width="100%">
+</p>
 
 The same stages run with model-based content: seed papers + a calibration data plan (FRED/BCRP series downloaded automatically), model-based ideation scored on mechanism/discipline/tractability, a **model smoke test** (3.3), a human **model specification review** (3.5), and in Stage 4 a continuous-time HJB–KFE solver (`pipeline/macro/ha_core.py`) plus an equilibrium test library (`pipeline/macro/equilibrium_checks.py`). Every model must report its class contract of tests — market clearing, **Walras' law on the omitted market**, generator/density checks, state constraints, `r < ρ`, transition budget identities, determinacy, TANK→RANK nesting — and **any HARD failure stops the pipeline before a paper is written**. See [orchestration.md → Macro track](orchestration.md#macro-track-quantitative-macro--general-equilibrium) for the full flow and test contract.
 
