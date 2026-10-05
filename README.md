@@ -532,6 +532,15 @@ Each stage records its result under `stages.stage<N>` with at minimum a `status`
 All third-party components are used under their respective open-source licenses (MIT unless otherwise noted).
 
 
+## Related projects
+
+Independent projects worth using or reviewing alongside Papers-HQ:
+
+| Project | Author | Why look at it |
+|---|---|---|
+| [academic-research-skills](https://github.com/Imbad0202/academic-research-skills) | [@Imbad0202](https://github.com/Imbad0202) | Claude Code skills for academic research — literature review, paper analysis, LaTeX writing, peer review. Usable as standalone skills or alongside this pipeline. |
+
+
 ## License
 
 MIT — free to use, adapt, and share. Skills under `Skills/` retain their original [MIT license](https://github.com/claesbackman/AI-research-feedback) from Claes Bäckman.
