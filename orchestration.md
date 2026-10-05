@@ -468,3 +468,54 @@ editorial decision                package + final quality gate
 - **Two entry paths:** Path A (`--topic` only) searches GitHub for replication packages and discovers data. Path B (`--topic` + `--data`) accepts a user-provided dataset (URL or file), analyzes its structure, and finds 3 papers tailored to the data context and applicable methodologies. Both paths converge on the same handoff format to Stage 2.
 - **Python only:** All analysis scripts use Python exclusively (pandas, pyfixest, linearmodels, statsmodels, matplotlib, seaborn).
 - **Versioning:** Papers are versioned and tracked; R&R rounds produce v2, v3, etc.
+
+---
+
+## Macro track (quantitative macro / general equilibrium)
+
+Enabled with `--paper-type macro`. For model-based papers (HANK, TANK, RANK, Aiyagari, Huggett, and — with a custom solver — two-asset HANK, Krusell–Smith, OLG, DMP). There is no causal identification: credibility comes from **one sharp mechanism, a verified equilibrium, and data discipline on the parameters that drive the result**. Each stage keeps its number and mechanics; its content changes.
+
+| Stage | Empirical track | Macro track | Gate |
+|---|---|---|---|
+| 1 | Dataset discovery | Seed papers from **macro journals and WP series** (OpenAlex venue filter: top-5, field journals, NBER/Fed/IMF; `--lit-scope`, `--journals`) + **calibration data plan** (moments, sources, FRED/BCRP ids) | — |
+| 1.5 | Download + profile data | Download calibration series (FRED CSV, BCRP API) | non-blocking |
+| 2 | Identification-first ideas | Model-based ideas: mechanism, model class, equilibrium, provable results, targets, experiment. Score = 0.20 N + 0.25 Mechanism + 0.20 Discipline + 0.20 Tractability + 0.15 Impact | — |
+| 2.5 | Human selection | Human selection (shows solver availability + test contract) | human |
+| 3.3 | Quick empirical test | **Model smoke test**: default calibration of the class through the real scripts; writes `quality_reports/model_contract.md` | warns |
+| 3 | 8-step evaluation | Literature step searches the same macro venues; same loop with `prompt_ideas_macro.txt` / `final_verdict_prompt_macro.txt` (mechanism, model adequacy, discipline, computation) | score < 4 → back to 2.5 |
+| 3.5 | Strategy review | **Model specification review** → `strategy/model_spec.json` | human |
+| 3.7 | Referee preview | Theory + computational referees → `referee_checklist.md` | — |
+| 4 | Templates DiD/IV/RDD/RCT/HTE | Model memo + `00_calibration → 01_steady_state → 02_dynamics → 03_output` with `ha_core.py` + `equilibrium_checks.py` | **any HARD test fails → pipeline stops** |
+| 4.5 | Data audit | Equilibrium & calibration audit (untargeted-moment gaps, SOFT failures) | critical flags |
+| 4.7 | Code review | Same agents; the mapping agent checks memo ↔ calibration ↔ code ↔ test contract | — |
+| 5 | Empirical paper | Macro structure: Model, Analytical Results, Calibration, Results, Sensitivity, Computational Appendix, Proofs | validators |
+| 5.5 | — | **Optional Lean formalization** (AppliedModelingLib) | never blocks |
+| 6 | 6 agents | Agents 3/4/6 swapped for model-claim discipline, HJB/KFE math, macro referee (`model_credibility`) | R&R loop |
+| 7 | Replication + gate | Same; "identification" weight = **model validity** (HARD tests, SOFT rate, calibration fit) | ≥ 85 |
+
+### Flow inside Stage 4 (what every model must pass)
+
+```
+00_calibration.py   spec + sources  ──► data/model/calibration.json
+                    tests: required params, targets documented, internal calibration identified
+01_steady_state.py  stationary GE (+ method-of-moments calibration)
+                    tests: HJB converged · generator rows sum 0 · off-diagonals ≥ 0 (upwind monotone)
+                           density ≥ 0, mass 1 · state constraints · c > 0 · market clearing (assets)
+                           WALRAS' LAW on goods · r < ρ · E[z] = 1 · government budget
+                           grid robustness (SOFT) · calibration targets
+02_dynamics.py      MIT shock in sequence space (Newton, brute-force Jacobian)
+                    tests: Newton converged · goods market along path · WALRAS' LAW on bonds along path
+                           household budget identity · mass conservation · (J − I) invertible
+                           iMPC columns sum to 1 in PV (SOFT) · path returns to SS (SOFT)
+                           TANK(λ=0) = RANK · output falls after tightening (SOFT)
+                    or counterfactual steady states, each re-tested for clearing + Walras
+03_output.py        tables (calibration, fit, equilibrium tests, experiment), figures
+                    (policies, wealth distribution, HANK/TANK/RANK IRFs, KMV decomposition),
+                    data/clean/main_results.csv, paper/tables/results_summary.md
+```
+
+Rules: scripts exit with code 1 on a HARD failure and are **not** auto-patched by the LLM — fix the model or calibration, never the test. `ha_core.py` and `equilibrium_checks.py` are hashed against `pipeline/macro/` and must not be edited per project. Classes without a template solver must still report the same test ids through `equilibrium_checks.TestReport`. The required ids per class are in `pipeline/macro/model_catalog.py`.
+
+### Tests of the track itself
+
+`python -m pytest tests/test_macro_track.py -q` — unit tests of every check, steady states of the three template classes, a deliberately broken economy that must fail Walras' law, HANK transition (Walras on the path, TANK→RANK nesting, RANK Euler closed form, iMPC present value, KMV decomposition), the four templates end to end, validator tamper/contract detection, the Stage 4 gate (pass and stop), the Stage 4.5 audit, model resolution, and the Lean stage (optional; checks before copying; copy is byte-identical).

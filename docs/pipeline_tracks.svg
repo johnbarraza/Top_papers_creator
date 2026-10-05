@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440" role="img" aria-label="Papers-HQ pipeline with empirical and macro tracks">
+<title>Papers-HQ pipeline: empirical and macro tracks</title>
+<rect x="0.5" y="0.5" width="1199" height="439" rx="12" fill="#ffffff" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="17" fill="#1f2937" font-weight="700" text-anchor="start" dominant-baseline="middle"><tspan x="20" y="28.0">Papers-HQ pipeline — one orchestrator, two paper types</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" fill="#6b7280" font-weight="400" text-anchor="end" dominant-baseline="middle"><tspan x="1180" y="28.0">--paper-type empirical | macro</tspan></text>
+<rect x="128.0" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="170.0" y="73.0">1 – 1.5</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="170.0" y="89.0">Discovery</tspan></text>
+<rect x="215.5" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="257.5" y="73.0">2</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="257.5" y="89.0">Ideation</tspan></text>
+<rect x="303.0" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="345.0" y="73.0">2.5</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="345.0" y="89.0">Idea selection</tspan></text>
+<rect x="390.5" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="432.5" y="73.0">3.3 + 3</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="432.5" y="89.0">Test &amp; validate</tspan></text>
+<rect x="478.0" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="520.0" y="73.0">3.5</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="520.0" y="89.0">Design review</tspan></text>
+<rect x="565.5" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="607.5" y="73.0">3.7</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="607.5" y="89.0">Referee preview</tspan></text>
+<rect x="653.0" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="695.0" y="73.0">4</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="695.0" y="89.0">Code</tspan></text>
+<rect x="740.5" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="782.5" y="73.0">4.5 – 4.7</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="782.5" y="89.0">Audit &amp; review</tspan></text>
+<rect x="828.0" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="870.0" y="73.0">5</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="870.0" y="89.0">Writing</tspan></text>
+<rect x="915.5" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="957.5" y="73.0">5.5</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="957.5" y="89.0">Lean</tspan></text>
+<rect x="1003.0" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="1045.0" y="73.0">6</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="1045.0" y="89.0">Peer review</tspan></text>
+<rect x="1090.5" y="58" width="84" height="46" rx="7" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="600" text-anchor="middle" dominant-baseline="middle"><tspan x="1132.5" y="73.0">7</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="1132.5" y="89.0">Submission</tspan></text>
+<rect x="16" y="112" width="104" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<rect x="16" y="112" width="5" height="108" rx="2.5" fill="#1d4ed8"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#1d4ed8" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="70.0" y="154.0">Empirical</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="70.0" y="171.6">identification-</tspan><tspan x="70.0" y="184.4">first</tspan></text>
+<rect x="128.0" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="170.0" y="159.3">Datasets +</tspan><tspan x="170.0" y="172.7">seed papers</tspan></text>
+<rect x="215.5" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="257.5" y="152.6">Identification-</tspan><tspan x="257.5" y="166.0">first ideas</tspan><tspan x="257.5" y="179.4">(DiD/IV/RDD)</tspan></text>
+<rect x="390.5" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="432.5" y="152.6">Pre-trends,</tspan><tspan x="432.5" y="166.0">permutation;</tspan><tspan x="432.5" y="179.4">8-step eval</tspan></text>
+<rect x="478.0" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="520.0" y="153.3">Identification</tspan><tspan x="520.0" y="166.7">strategy</tspan></text>
+<rect x="496.5" y="198" width="47" height="15" rx="7.5" fill="#7c3aed" stroke="#7c3aed" stroke-width="1.2"/><text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="8.5" fill="#ffffff" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="520.0" y="205.8">HUMAN</tspan></text>
+<rect x="565.5" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="607.5" y="159.3">Econometrics</tspan><tspan x="607.5" y="172.7">referees</tspan></text>
+<rect x="653.0" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="695.0" y="152.6">DiD / IV / RDD /</tspan><tspan x="695.0" y="166.0">RCT / HTE</tspan><tspan x="695.0" y="179.4">templates</tspan></text>
+<rect x="740.5" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="782.5" y="159.3">Data audit +</tspan><tspan x="782.5" y="172.7">code review</tspan></text>
+<rect x="828.0" y="112" width="84" height="108" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="870.0" y="159.3">Empirical</tspan><tspan x="870.0" y="172.7">paper</tspan></text>
+<rect x="16" y="228" width="104" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<rect x="16" y="228" width="5" height="108" rx="2.5" fill="#b45309"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#b45309" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="70.0" y="270.0">Macro</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7280" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="70.0" y="287.6">general</tspan><tspan x="70.0" y="300.4">equilibrium</tspan></text>
+<rect x="128.0" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="170.0" y="261.8">Macro journals</tspan><tspan x="170.0" y="275.3">+ calibration</tspan><tspan x="170.0" y="288.7">plan (FRED/</tspan><tspan x="170.0" y="302.2">BCRP)</tspan></text>
+<rect x="215.5" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="257.5" y="261.8">Mechanism-</tspan><tspan x="257.5" y="275.3">first ideas</tspan><tspan x="257.5" y="288.7">(HANK, TANK,</tspan><tspan x="257.5" y="302.2">Aiyagari…)</tspan></text>
+<rect x="390.5" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="432.5" y="261.8">Model smoke</tspan><tspan x="432.5" y="275.3">test; theory</tspan><tspan x="432.5" y="288.7">+ discipline</tspan><tspan x="432.5" y="302.2">eval</tspan></text>
+<rect x="478.0" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="520.0" y="269.3">Model</tspan><tspan x="520.0" y="282.7">specification</tspan></text>
+<rect x="496.5" y="314" width="47" height="15" rx="7.5" fill="#7c3aed" stroke="#7c3aed" stroke-width="1.2"/><text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="8.5" fill="#ffffff" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="520.0" y="321.8">HUMAN</tspan></text>
+<rect x="565.5" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="607.5" y="268.6">Theory +</tspan><tspan x="607.5" y="282.0">computation</tspan><tspan x="607.5" y="295.4">referees</tspan></text>
+<rect x="653.0" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#dc2626" stroke-width="1.8"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="695.0" y="262.6">HJB-KFE solver</tspan><tspan x="695.0" y="276.0">+ equilibrium</tspan><tspan x="695.0" y="289.4">tests</tspan></text>
+<rect x="675.0" y="314" width="40" height="15" rx="7.5" fill="#dc2626" stroke="#dc2626" stroke-width="1.2"/><text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="8.5" fill="#ffffff" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="695.0" y="321.8">GATE</tspan></text>
+<rect x="740.5" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="782.5" y="268.6">Equilibrium &amp;</tspan><tspan x="782.5" y="282.0">calibration</tspan><tspan x="782.5" y="295.4">audit</tspan></text>
+<rect x="828.0" y="228" width="84" height="108" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="870.0" y="268.6">Macro paper</tspan><tspan x="870.0" y="282.0">(model, calib.,</tspan><tspan x="870.0" y="295.4">proofs)</tspan></text>
+<rect x="303.0" y="112" width="84" height="224" rx="8" fill="#f3f4f6" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="345.0" y="209.3">You pick</tspan><tspan x="345.0" y="222.7">1 of top 3</tspan></text>
+<rect x="321.5" y="310" width="47" height="15" rx="7.5" fill="#7c3aed" stroke="#7c3aed" stroke-width="1.2"/><text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="8.5" fill="#ffffff" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="345.0" y="317.8">HUMAN</tspan></text>
+<rect x="915.5" y="112" width="84" height="224" rx="8" fill="#f3f4f6" stroke="#d1d5db" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="957.5" y="195.8">Optional</tspan><tspan x="957.5" y="209.3">AppliedModeling-</tspan><tspan x="957.5" y="222.7">Lib check →</tspan><tspan x="957.5" y="236.2">copy to lean/</tspan></text>
+<rect x="923.5" y="310" width="68" height="15" rx="7.5" fill="#6b7280" stroke="#6b7280" stroke-width="1.2"/><text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="8.5" fill="#ffffff" font-weight="700" text-anchor="middle" dominant-baseline="middle"><tspan x="957.5" y="317.8">OPTIONAL</tspan></text>
+<rect x="1003.0" y="112" width="84" height="224" rx="8" fill="#f3f4f6" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="1045.0" y="203.8">6 agents,</tspan><tspan x="1045.0" y="217.3">R&amp;R loop;</tspan><tspan x="1045.0" y="230.7">macro swaps</tspan><tspan x="1045.0" y="244.2">referees 3/4/6</tspan></text>
+<rect x="1090.5" y="112" width="84" height="224" rx="8" fill="#f3f4f6" stroke="#d1d5db" stroke-width="1.2"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#1f2937" font-weight="400" text-anchor="middle" dominant-baseline="middle"><tspan x="1132.5" y="203.8">Replication +</tspan><tspan x="1132.5" y="217.3">quality gate</tspan><tspan x="1132.5" y="230.7">(macro: model</tspan><tspan x="1132.5" y="244.2">validity)</tspan></text>
+<line x1="211.0" y1="81.0" x2="216.5" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="298.5" y1="81.0" x2="304.0" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="386.0" y1="81.0" x2="391.5" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="473.5" y1="81.0" x2="479.0" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="561.0" y1="81.0" x2="566.5" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="648.5" y1="81.0" x2="654.0" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="736.0" y1="81.0" x2="741.5" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="823.5" y1="81.0" x2="829.0" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="911.0" y1="81.0" x2="916.5" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="998.5" y1="81.0" x2="1004.0" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<line x1="1086.0" y1="81.0" x2="1091.5" y2="81.0" stroke="#6b7280" stroke-width="1.4"/>
+<rect x="20" y="360" width="12" height="12" rx="3" fill="#7c3aed"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#1f2937" font-weight="400" text-anchor="start" dominant-baseline="middle"><tspan x="38" y="366.0">Human checkpoint (SELECT / APPROVE / REJECT)</tspan></text>
+<rect x="353.6" y="360" width="12" height="12" rx="3" fill="#dc2626"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#1f2937" font-weight="400" text-anchor="start" dominant-baseline="middle"><tspan x="371.6" y="366.0">Stops the pipeline if any HARD equilibrium test fails</tspan></text>
+<rect x="744.8000000000001" y="360" width="12" height="12" rx="3" fill="#6b7280"/>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#1f2937" font-weight="400" text-anchor="start" dominant-baseline="middle"><tspan x="762.8000000000001" y="366.0">Optional: --lean manual | auto</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7280" font-weight="400" text-anchor="start" dominant-baseline="middle"><tspan x="20" y="390.0">Loops: reject all → Stage 2 · weak idea or rejected design → Stage 2.5 · R&amp;R between 5 and 6 (max 3 rounds)</tspan></text>
+<text font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7280" font-weight="400" text-anchor="start" dominant-baseline="middle"><tspan x="20" y="410.0">Models: opus → claude-opus-5-5 (verdicts, referees, macro, Lean) · sonnet → claude-sonnet-5-5 (default) · haiku → claude-haiku-4-5</tspan></text>
+</svg>

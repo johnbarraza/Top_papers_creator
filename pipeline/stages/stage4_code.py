@@ -283,6 +283,10 @@ def run(project_dir: Path, state: dict) -> dict:
     Pipeline then validates and saves state.
     """
     from ..claude_runner import request_manual_intervention
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.model_code import run_stage4
+        return run_stage4(project_dir, state)
 
     scripts_dir = project_dir / "scripts" / "python"
     scripts_dir.mkdir(parents=True, exist_ok=True)

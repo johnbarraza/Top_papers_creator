@@ -206,14 +206,15 @@ def _load_latex_template() -> str:
     return preamble
 
 
-def _load_paper_structure_template() -> str:
+def _load_paper_structure_template(macro: bool = False) -> str:
     """Load the paper structure template with mandatory sections.
 
     Returns the body template (after \\begin{document}) that defines
     the section order and content requirements with {{PLACEHOLDER}} blocks.
     """
     from ..config import PAPERS_HQ
-    template_path = PAPERS_HQ / "pipeline" / "templates" / "paper_structure.tex"
+    name = "paper_structure_macro.tex" if macro else "paper_structure.tex"
+    template_path = PAPERS_HQ / "pipeline" / "templates" / name
     if not template_path.exists():
         return ""
 
@@ -250,8 +251,13 @@ def run(project_dir: Path, state: dict) -> dict:
             "- \\date{\\today}\n"
         )
 
+    from ..paper_types import is_macro
+    macro = is_macro(state)
+    if macro:
+        from .macro_stages import prompts as macro_prompts
+
     # Load the mandatory paper structure template
-    structure_template = _load_paper_structure_template()
+    structure_template = _load_paper_structure_template(macro=macro)
     structure_instruction = ""
     if structure_template:
         structure_instruction = (
@@ -384,7 +390,7 @@ def run(project_dir: Path, state: dict) -> dict:
         if not any("follow" in c or "wave" in c or "round" in c for c in col_lower):
             missing_info.append("follow-up wave identifiers")
 
-        if missing_info:
+        if missing_info and not macro:
             data_disclaimer = (
                 "\n\n*** DATA AVAILABILITY DISCLAIMER ***\n"
                 "The following information is NOT available in this dataset:\n"
@@ -405,10 +411,14 @@ def run(project_dir: Path, state: dict) -> dict:
                 + "\nThese were tested and failed. Do not claim they were used."
             )
 
+        if macro:
+            output_note += macro_prompts.model_results_block(project_dir)
+
         # First draft — main.tex does not exist yet
         request_manual_intervention(
             stage="stage5_writing",
             issue=(
+                (macro_prompts.WRITING_STANDARDS if macro else (
                 "Stage 5 needs manual paper writing. "
                 "Tell Claude: 'revisa el pipeline'. Claude will read the strategy memo "
                 "and results, write a single main.tex with all sections (intro, literature, "
@@ -469,7 +479,8 @@ def run(project_dir: Path, state: dict) -> dict:
                 "  Every table MUST have: (a) what the dependent variable is,\n"
                 "  (b) SE type (HC2/clustered/bootstrap), (c) significance stars defined,\n"
                 "  (d) sample description, (e) controls/FE listed.\n"
-                "\n\n*** LATEX COMPILATION RULES (avoids 30+ pdflatex errors) ***\n"
+                ))
+                + "\n\n*** LATEX COMPILATION RULES (avoids 30+ pdflatex errors) ***\n"
                 "These rules prevent the most common pdflatex compilation failures.\n"
                 "Following them strictly raises the Paper score from ~50 to ~80.\n\n"
                 "RULE 1 - ESCAPE SPECIAL CHARS IN TEXT MODE:\n"
@@ -526,11 +537,11 @@ def run(project_dir: Path, state: dict) -> dict:
                 + figures_instruction
                 + output_note
             ),
-            files=[
+            files=(macro_prompts.writing_files(project_dir) if macro else [
                 str(project_dir / "strategy" / "strategy_memo.md"),
                 str(project_dir / "paper" / "tables" / "results_summary.md"),
                 str(project_dir / "scripts" / "python"),
-            ],
+            ]),
             project_dir=project_dir,
         )
     elif is_rr:

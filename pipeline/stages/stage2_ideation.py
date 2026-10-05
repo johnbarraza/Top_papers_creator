@@ -78,6 +78,10 @@ _METHOD_SCORES = {
 
 def run(project_dir: Path, state: dict) -> dict:
     """Execute Stage 2 in normal ideation or replication/HTE mode."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.ideation import run_stage2
+        return run_stage2(project_dir, state)
     mode = _resolve_stage2_mode(state)
     if mode == "replication":
         return _run_replication_mode(project_dir, state)

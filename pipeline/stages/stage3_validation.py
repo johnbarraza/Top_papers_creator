@@ -108,8 +108,15 @@ def _search_semantic_scholar(query: str, max_results: int = 10) -> list[dict]:
         return []
 
 
-def _read_prompt(filename: str) -> str:
-    """Read a prompt template from the idea-evaluation-pipeline repo."""
+def _read_prompt(filename: str, macro: bool = False) -> str:
+    """Read a prompt template from the idea-evaluation-pipeline repo.
+
+    In the macro track a `<name>_macro.txt` variant is used when it exists.
+    """
+    if macro:
+        variant = EVAL_REPO / filename.replace(".txt", "_macro.txt")
+        if variant.exists():
+            return variant.read_text(encoding="utf-8")
     path = EVAL_REPO / filename
     if not path.exists():
         print(f"  [error] Prompt file not found: {path}")
@@ -317,6 +324,12 @@ Include these assessments in your evaluation and factor them into your score.
 A Tier 4 identification strategy should not score above 6/10 regardless of novelty.
 """
 
+    from ..paper_types import is_macro
+    macro = is_macro(state)
+    if macro:
+        from .macro_stages.model_review import stage3_idea_text
+        idea_text = stage3_idea_text(best_idea, state)
+
     # Set up evaluation directory
     eval_dir = project_dir / "evaluation"
     eval_dir.mkdir(exist_ok=True)
@@ -341,7 +354,7 @@ A Tier 4 identification strategy should not score above 6/10 regardless of novel
     def _run_combined_step(step_key: str) -> str:
         """Run a combined step, merging prompts if needed."""
         step_def = COMBINED_STEPS[step_key]
-        prompts = [_read_prompt(pf) for pf in step_def["prompts"]]
+        prompts = [_read_prompt(pf, macro) for pf in step_def["prompts"]]
         if _history_cache["dirty"]:
             _history_cache["text"] = _build_history(eval_dir)
             _history_cache["dirty"] = False
@@ -374,6 +387,17 @@ A Tier 4 identification strategy should not score above 6/10 regardless of novel
 
             print(f"  [semantic-scholar] Searching for related papers...")
             ss_papers = _search_semantic_scholar(search_query, max_results=10)
+            if macro:
+                from ..macro.literature import scopes_from_state, search_journals
+                scopes, extra = scopes_from_state(state)
+                jp = search_journals(search_query, scopes=scopes, extra_journals=extra,
+                                     max_results=12)
+                seen = {p["title"].lower() for p in jp}
+                ss_papers = [{"title": p["title"], "authors": p["authors"], "year": p["year"],
+                              "venue": f"{p['venue']} [{p['venue_tier']}]",
+                              "citations": p["citationCount"],
+                              "abstract": (p["abstract"] or "")[:200]} for p in jp] + \
+                            [p for p in ss_papers if p["title"].lower() not in seen]
 
             if ss_papers:
                 papers_text = "\n".join(
@@ -463,7 +487,13 @@ A Tier 4 identification strategy should not score above 6/10 regardless of novel
                 id_score = best_idea.get("identification", 0)
 
                 # Hard reject: Tier 4 / Level C designs with score < 5
-                if (score is not None and score < 5 and
+                # (macro track: no identification level, the score decides)
+                if macro:
+                    final_status = ("REJECTED_WEAK_ID" if score is not None and score < 4
+                                    else "APPROVED_WITH_CAVEATS")
+                    if final_status == "REJECTED_WEAK_ID":
+                        print(f"  [REJECT] Score {score} < 4: model idea too weak to proceed.")
+                elif (score is not None and score < 5 and
                         (id_level in ("C", "D") or id_score <= 1)):
                     final_status = "REJECTED_WEAK_ID"
                     print(f"  [REJECT] Score {score} < 5 with Level {id_level} identification.")

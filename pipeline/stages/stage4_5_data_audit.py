@@ -264,6 +264,10 @@ def _generate_audit_report(flags: list[dict], df: pd.DataFrame) -> str:
 
 def run(project_dir: Path, state: dict) -> dict:
     """Execute Stage 4.5: data audit on clean data."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.model_code import run_stage4_5
+        return run_stage4_5(project_dir, state)
 
     # Skip if already completed
     if state["stages"].get("stage4_5", {}).get("status") == "completed":

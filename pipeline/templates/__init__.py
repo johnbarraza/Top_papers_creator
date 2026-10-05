@@ -1,6 +1,6 @@
 """Script templates by research design type.
 
-Each design (RDD, DiD, RCT, IV) has 4 template scripts:
+Each design (RDD, DiD, RCT, IV, HTE, macro) has 4 template scripts:
   - 00_clean.py: data loading, cleaning, validation
   - 01_main.py: main estimation
   - 02_robustness.py: robustness checks
@@ -77,6 +77,23 @@ AVAILABLE_DESIGNS = {
             "PLACEBO_OUTCOMES",
         ],
     },
+    "macro": {
+        "name": "Quantitative macro / general equilibrium (HJB-KFE, HANK)",
+        "scripts": [
+            "macro_00_calibration.py",
+            "macro_01_steady_state.py",
+            "macro_02_dynamics.py",
+            "macro_03_output.py",
+        ],
+        "targets": ["00_calibration.py", "01_steady_state.py",
+                    "02_dynamics.py", "03_output.py"],
+        "variables": [
+            "PAPER_TITLE", "MODEL_CLASS", "TIME_UNIT", "PARAMS", "PARAM_SOURCES",
+            "CALIBRATION_TARGETS", "INTERNAL_CALIBRATION", "UNTARGETED_MOMENTS",
+            "EXPERIMENT", "DATA_FILES", "GRID_ROBUSTNESS", "TANK_LAMBDA",
+            "MOMENT_LABELS",
+        ],
+    },
     "iv": {
         "name": "Instrumental Variables / 2SLS",
         "scripts": [
@@ -124,7 +141,8 @@ def get_all_templates(design: str) -> dict[str, str]:
     if design not in AVAILABLE_DESIGNS:
         return result
 
-    target_names = ["00_clean.py", "01_main.py", "02_robustness.py", "03_output.py"]
+    target_names = AVAILABLE_DESIGNS[design].get(
+        "targets", ["00_clean.py", "01_main.py", "02_robustness.py", "03_output.py"])
     for i, target in enumerate(target_names):
         content = get_template(design, i)
         if content:

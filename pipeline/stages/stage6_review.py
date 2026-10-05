@@ -1195,6 +1195,14 @@ def run(project_dir: Path, state: dict) -> dict:
     table_files = ", ".join(_gather_tables(paper_dir)) or "(none)"
     figure_files = ", ".join(_gather_figures(paper_dir)) or "(none)"
 
+    from ..paper_types import is_macro
+    macro = is_macro(state)
+    if macro:
+        from .macro_stages import prompts as macro_prompts
+        extras = macro_prompts.evidence_extras(project_dir)
+        if extras:
+            evidence_packet += "\n\n" + extras
+
     # Add estimator constraints
     estimator_note = _gather_estimator_constraints(state)
     if estimator_note:
@@ -1274,6 +1282,13 @@ Do NOT re-raise issues that have been satisfactorily resolved.
                              smart_truncate(evidence_packet, 5_000), target_journal),
     ]
 
+    if macro:
+        prompts[2] = macro_prompts.agent3_prompt(paper_truncated, evidence_truncated)
+        prompts[3] = macro_prompts.agent4_prompt(paper_truncated)
+        prompts[5] = macro_prompts.agent6_prompt(
+            paper_for_agent6, smart_truncate(strategy_memo, 1500),
+            smart_truncate(evidence_packet, 5_000), target_journal)
+
     # Warn if any prompt exceeds budget
     for i, prompt in enumerate(prompts):
         if len(prompt) > MAX_PROMPT_CHARS:
@@ -1292,6 +1307,7 @@ Do NOT re-raise issues that have been satisfactorily resolved.
     # ── Run all 6 agents in parallel ──────────────────────────────────
     print("  [6] Launching 6 review agents in parallel...")
     pr = get_profile("stage6_referee")
+    p6 = get_profile("stage6_contribution")
 
     # Agent 6 (contribution-referee) gets a longer timeout because its
     # prompt is the largest and its response is the most detailed.
@@ -1311,7 +1327,8 @@ Do NOT re-raise issues that have been satisfactorily resolved.
         # to avoid the chronic timeout issue (65K+ prompt + 6-part response)
         if i == 5:
             task["timeout"] = AGENT6_TIMEOUT
-            task["effort"] = "medium"
+            task["model"] = p6["model"]
+            task["effort"] = p6["effort"]
         tasks.append(task)
 
     # Add a SECOND Agent 6 run (Agent 6b) for score averaging.
@@ -1320,8 +1337,8 @@ Do NOT re-raise issues that have been satisfactorily resolved.
     agent6b_task = {
         "prompt": prompts[5] + "\n\n(This is an independent second evaluation. "
                   "Score based solely on the paper's merits.)",
-        "model": pr["model"],
-        "effort": "medium",
+        "model": p6["model"],
+        "effort": p6["effort"],
         "output_file": review_dir / f"agent6b_contribution{round_suffix}.md",
         "label": "contribution-referee-b",
         "allowed_tools": [],

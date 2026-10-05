@@ -1,0 +1,115 @@
+% ═══════════════════════════════════════════════════════════════════════════════
+% PAPER STRUCTURE TEMPLATE (MACRO TRACK) — Auto-filled by Stage 5
+%
+% Model-based general-equilibrium paper (Kaplan-Moll-Violante / Achdou et al.
+% style). The LaTeX preamble is loaded separately from example.tex.
+%
+% RULES:
+% 1. Do NOT reorder sections; do NOT delete sections
+% 2. Every {{PLACEHOLDER}} must be replaced with actual content
+% 3. Numbers MUST come from data/clean/main_results.csv and data/model/*.json
+% 4. No causal-inference vocabulary: there is no "treatment", "identification
+%    strategy" or "estimate" here — the model is solved and calibrated
+% ═══════════════════════════════════════════════════════════════════════════════
+
+\title{ {{PAPER_TITLE}} }
+\author{ {{AUTHOR_LINE}} }
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+{{ABSTRACT_QUESTION}}
+% ONE sentence: the macro question and why heterogeneity / GE matters for it.
+{{ABSTRACT_MODEL}}
+% ONE sentence: the model (class, key friction) and how it is disciplined by data.
+{{ABSTRACT_RESULTS}}
+% 2 sentences with exact numbers: main quantitative result and comparison with
+% the RANK/TANK benchmark (e.g. impact response, direct-effect share).
+{{ABSTRACT_IMPLICATIONS}}
+\end{abstract}
+
+\textbf{JEL Codes:} {{JEL_CODES}} \\
+\textbf{Keywords:} {{KEYWORDS}}
+
+\newpage
+
+\section{Introduction}
+\label{sec:introduction}
+% P1 question & motivation; P2 the mechanism in one sentence; P3 the model and
+% its discipline (targeted moments); P4 main results with numbers; P5 why the
+% answer differs from RANK/TANK; P6 contribution to literature; P7 road map.
+{{INTRO}}
+
+\section{Related Literature}
+\label{sec:literature}
+% (i) HA macro / HANK; (ii) the topic-specific literature; (iii) methods
+% (continuous time, sequence space). Cite only papers you are certain exist.
+{{LITERATURE}}
+
+\section{Model}
+\label{sec:model}
+\subsection{Environment}
+{{MODEL_ENVIRONMENT}}
+% Agents, preferences, income process (Poisson types, generator Lambda), assets
+% and borrowing limit, technology, government budget, monetary/fiscal rule.
+\subsection{Household problem}
+{{MODEL_HOUSEHOLD}}
+% HJB equation and KFE in continuous time (Achdou et al. 2022), state
+% constraint at the borrowing limit, first-order condition.
+\subsection{Equilibrium}
+{{MODEL_EQUILIBRIUM}}
+% Formal definition (prices, policies, distribution, market clearing).
+% Remark: which market is redundant by Walras' law and why (aggregate budget).
+
+\section{Analytical Results}
+\label{sec:analytical}
+% Propositions with proofs (in the appendix): e.g. r < rho with a borrowing
+% limit; TANK multiplier; decomposition of the response into direct and
+% indirect effects. If Stage 5.5 (Lean) ran, state which results are
+% machine-checked and which remain informal, exactly as lean/ reports.
+{{ANALYTICAL_RESULTS}}
+
+\section{Calibration}
+\label{sec:calibration}
+% Externally set vs internally calibrated parameters (Table tab:calibration);
+% targeted and untargeted moments (Table tab:moments). Explain which moment
+% pins which parameter and why that moment matters for the mechanism.
+{{CALIBRATION}}
+
+\section{Results}
+\label{sec:results}
+\subsection{Stationary equilibrium}
+{{RESULTS_STEADY_STATE}}
+\subsection{Main experiment}
+{{RESULTS_EXPERIMENT}}
+% Figures fig_irf_output / fig_irf_decomposition or fig_counterfactuals;
+% Table tab:experiment. Compare HANK with TANK and RANK and explain the gap.
+
+\section{Sensitivity}
+\label{sec:sensitivity}
+% How the main number moves with the parameters that drive it; grid and
+% horizon robustness; every SOFT test that failed is discussed here.
+{{SENSITIVITY}}
+
+\section{Conclusion}
+\label{sec:conclusion}
+{{CONCLUSION}}
+% Include an honest limitations paragraph (what the model abstracts from).
+
+\appendix
+\section{Computational Appendix}
+\label{app:computation}
+% Algorithm (implicit upwind finite differences; KFE as the transpose of the
+% generator; sequence-space Newton), grids and tolerances, and Table
+% tab:eqtests with every equilibrium test (Walras' law, market clearing, ...).
+{{COMPUTATIONAL_APPENDIX}}
+
+\section{Proofs}
+\label{app:proofs}
+{{PROOFS}}
+
+% thebibliography goes here (see LaTeX rules)
+\end{document}

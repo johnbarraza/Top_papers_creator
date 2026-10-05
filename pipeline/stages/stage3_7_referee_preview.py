@@ -24,6 +24,10 @@ def _read_file_or(path: Path, default: str = "") -> str:
 
 def run(project_dir: Path, state: dict) -> dict:
     """Execute Stage 3.7: referee preview of code/analysis requirements."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.model_review import run_stage3_7
+        return run_stage3_7(project_dir, state)
 
     # Skip if already completed
     if state["stages"].get("stage3_7", {}).get("status") == "completed":

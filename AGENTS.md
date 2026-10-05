@@ -52,6 +52,12 @@ python run_pipeline.py --topic "Labor Markets" --data "./panel.csv"
 # Path C — data-first (find best datasets, then suggest topics)
 python run_pipeline.py --path-c
 
+# Macro track (general equilibrium: HANK/TANK/Aiyagari/Huggett)
+python run_pipeline.py --topic "Monetary policy transmission" --paper-type macro
+
+# Optional Lean formalization of the paper (AppliedModelingLib clone required)
+python run_pipeline.py --from-stage 5.5 --to-stage 5.5 --project my_macro --lean manual --lean-lib ../AppliedModelingLib
+
 # Replication mode (student assignment)
 python run_pipeline.py --topic "cash transfers Peru" --mode replicate
 
@@ -73,6 +79,12 @@ python run_pipeline.py --status my_project_20260502_145708
 | `pipeline/paper_searcher.py` | Paper candidate search + ranking |
 | `pipeline/human_checkpoint.py` | Interactive prompts at Stages 2.5, 3.5 |
 | `pipeline/stages/` | One file per pipeline stage |
+| `pipeline/paper_types.py` | Routes each stage to the empirical or macro track |
+| `pipeline/macro/` | Macro track: `ha_core.py` (HJB-KFE solver), `equilibrium_checks.py` (GE tests), `model_catalog.py` (model classes + test contracts) |
+| `pipeline/macro/literature.py` | Journal-targeted search (OpenAlex venue filter: top-5, macro field journals, NBER/Fed/IMF WPs) |
+| `pipeline/stages/macro_stages/` | Macro implementations of Stages 1-4.5 and macro prompts for 4.7/5/6 |
+| `pipeline/stages/stage5_5_lean.py` | Optional Lean formalization (AppliedModelingLib) |
+| `tests/test_macro_track.py` | Tests for the macro track (`python -m pytest tests -q`) |
 | `check_sources.py` | Health-check all 38 data sources |
 | `requirements.txt` | Python dependencies (see breakdown below) |
 | `Skills/` | review-paper and review-paper-code skill definitions |
@@ -113,6 +125,20 @@ export PIPELINE_NOTEBOOKLM=auto
 export PIPELINE_CLAUDE_TIMEOUT=600
 export PIPELINE_PYTHON_TIMEOUT=600
 
+# Paper type default: empirical | macro
+export PIPELINE_PAPER_TYPE=empirical
+
+# Models: tiers resolve to claude-opus-5-5 / claude-sonnet-5-5 / claude-haiku-4-5
+export PIPELINE_MODEL_OPUS=claude-fable-5-1   # optional per-tier override
+
+# Macro track: official FRED API for calibration series (public CSV endpoint often hangs)
+export FRED_API_KEY=<free key from fred.stlouisfed.org>
+
+# Optional Lean stage (5.5)
+export PIPELINE_LEAN=off                      # off | manual | auto
+export PIPELINE_LEAN_LIB=../AppliedModelingLib
+export PIPELINE_LEAN_AGENT_CMD=""             # agent CLI for --lean auto ({prompt_file}, {folder})
+
 # DeepSeek backend (alternative to Anthropic)
 export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
 export ANTHROPIC_AUTH_TOKEN="<your DeepSeek API key>"
@@ -143,6 +169,10 @@ export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
 - This pipeline runs `claude -p` (headless) as a subprocess for every LLM call.
   The calling agent does NOT need to replicate the LLM reasoning — it only
   needs to run the Python orchestrator and handle errors.
+- Macro track: Stage 4 stops the pipeline if any HARD equilibrium test fails
+  (`data/model/equilibrium_tests.json`). Fix the model or calibration in
+  `00_calibration.py`; never edit `ha_core.py`, `equilibrium_checks.py` or code
+  below `FIXED CODE` (the library is hash-checked).
 - Stage 2.5 and 3.5 are human checkpoints. In non-interactive mode, they will
   block waiting for input. Agents should warn the user about this.
 - The `check_sources.py` script is safe to run any time — it only does

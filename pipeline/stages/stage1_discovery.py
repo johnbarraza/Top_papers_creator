@@ -5870,7 +5870,11 @@ def _run_path_a_topic_aware(project_dir: Path, topic: str, state: dict) -> dict:
 # ── Public runner ────────────────────────────────────────────────────────────
 
 def run(project_dir: Path, topic: str, state: dict, data_path: Optional[str] = None, path_c: bool = False, smoke: bool = False) -> dict:
-    """Execute Stage 1 Discovery - Path A, B, or C."""
+    """Execute Stage 1 Discovery - Path A, B, or C (or the macro track)."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.discovery import run_stage1
+        return run_stage1(project_dir, topic, state, data_path=data_path)
     if path_c:
         return _run_path_c(project_dir, state, smoke=smoke)
 

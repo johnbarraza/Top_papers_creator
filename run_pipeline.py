@@ -4,7 +4,9 @@ Papers-HQ: Automated Academic Paper Production Pipeline v2
 ==========================================================
 Hybrid orchestrator — Claude handles reasoning, Python handles execution.
 
-7 stages + 2 human checkpoints:
+7 stages + 2 human checkpoints (+ optional Lean stage):
+  Paper types: --paper-type empirical (default, identification-first) or
+               --paper-type macro (general equilibrium: HA, HANK, TANK, RANK)
   Stage 1:   Discovery        (Path A: repos  |  Path B: user data)
   Stage 2:   Ideation         (research-junshi)
   Stage 2.5: Idea Selection   (human checkpoint)
@@ -13,6 +15,7 @@ Hybrid orchestrator — Claude handles reasoning, Python handles execution.
   Stage 4:   Strategy & Code  (generate + execute Python scripts)
   Stage 4.7: Code Review      (review-paper-code skill + correction loop)
   Stage 5:   Writing          (LaTeX paper draft + compile)
+  Stage 5.5: Lean (optional)  (AppliedModelingLib formalization, --lean)
   Stage 6:   Peer Review      (6-agent review-paper skill, R&R loop)
   Stage 7:   Submission       (journal targeting + replication audit)
 
@@ -22,13 +25,16 @@ Usage:
   python run_pipeline.py --from-stage 2 --project my_project
   python run_pipeline.py --from-stage 2.5 --project my_project
   python run_pipeline.py --status my_project
+  python run_pipeline.py --topic "Monetary policy transmission" --paper-type macro
+  python run_pipeline.py --from-stage 5.5 --project my_macro --lean manual --lean-lib ../AppliedModelingLib
 """
 
 import argparse
 import sys
 from datetime import datetime
 
-from pipeline.config import PAPERS_HQ, STAGE_ORDER, STAGE_NAMES
+from pipeline.config import PAPER_TYPES, PAPERS_HQ, STAGE_ORDER, STAGE_NAMES
+from pipeline.paper_types import get_paper_type, is_macro, stage_name
 from pipeline.state import ensure_project_dir, load_state, save_state
 
 
@@ -42,10 +48,11 @@ def print_status(project_dir):
     print(f"Created: {state.get('created_at', 'N/A')}")
     print(f"Updated: {state.get('updated_at', 'N/A')}")
     print(f"Current Stage: {state.get('current_stage', 0)}")
+    print(f"Paper type: {get_paper_type(state)}")
     print()
 
     for stage_num in STAGE_ORDER:
-        name = STAGE_NAMES[stage_num]
+        name = stage_name(stage_num, state)
         key = f"stage{stage_num}".replace(".", "_")
         info = state.get("stages", {}).get(key, {})
         status = info.get("status", "pending")
@@ -73,8 +80,8 @@ def print_status(project_dir):
 # Stage header
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _stage_header(stage_num):
-    name = STAGE_NAMES.get(stage_num, "Unknown")
+def _stage_header(stage_num, state=None):
+    name = stage_name(stage_num, state) if state else STAGE_NAMES.get(stage_num, "Unknown")
     print(f"\n{'=' * 60}")
     print(f"STAGE {stage_num}: {name}")
     print("=" * 60)
@@ -85,6 +92,14 @@ def _stage_header(stage_num):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    # LLM output printed to a cp1252 Windows console/pipe (Greek letters, math)
+    # must never crash a stage.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(
         description="Papers-HQ v2: End-to-end academic paper production pipeline"
     )
@@ -109,6 +124,27 @@ def main():
                         help="NotebookLM integration: auto (offer at checkpoints), on (require), off (skip)")
     parser.add_argument("--status", type=str, metavar="PROJECT",
                         help="Show status of a project")
+    parser.add_argument("--paper-type", choices=list(PAPER_TYPES), default=None,
+                        help="empirical (identification-first, default) or macro "
+                             "(general-equilibrium models: HA/HANK/TANK/RANK)")
+    parser.add_argument("--lit-scope", type=str, default=None,
+                        help="Macro literature venues, comma-separated from: top5, macro_field, "
+                             "working_papers, preprints (default: top5,macro_field,working_papers)")
+    parser.add_argument("--journals", type=str, default=None,
+                        help='Extra journals to search, ";"-separated exact titles '
+                             '(e.g. "Revista Estudios Economicos;Economia")')
+    parser.add_argument("--lean", choices=["off", "manual", "auto"], default=None,
+                        help="Stage 5.5 Lean formalization (AppliedModelingLib): off (default), "
+                             "manual (you run the agent; pipeline waits), auto "
+                             "(PIPELINE_LEAN_AGENT_CMD or claude -p)")
+    parser.add_argument("--lean-lib", type=str, default=None,
+                        help="Path to the local AppliedModelingLib clone")
+    parser.add_argument("--lean-source", type=str, default=None,
+                        help="Paper to formalize (arXiv URL or PDF); default: this project's paper")
+    parser.add_argument("--lean-folder", type=str, default=None,
+                        help="Paper folder name inside AppliedModelingLib/papers/")
+    parser.add_argument("--lean-export", type=str, default=None,
+                        help="Also copy the generated folder to <dir>/lean (e.g. a weekly repo)")
 
     args = parser.parse_args()
 
@@ -182,6 +218,15 @@ def main():
         else:
             args.path_c = False
 
+        if args.paper_type is None:
+            print()
+            print("  Paper type:")
+            print("  [E] Empirical  - causal identification (DiD, IV, RDD, RCT)")
+            print("  [M] Macro      - general-equilibrium model (HANK, TANK, Aiyagari,")
+            print("                   Huggett): calibration + equilibrium tests")
+            choice = input("  Choose [E/M] (default E): ").strip().upper()
+            args.paper_type = "macro" if choice == "M" else "empirical"
+
         print()
 
     # ── Ensure path_c attribute exists ──────────────────────────────────
@@ -223,6 +268,19 @@ def main():
         state["path_c"] = True
     if args.smoke:
         state.setdefault("config", {})["smoke"] = True
+    if args.paper_type:
+        state.setdefault("config", {})["paper_type"] = args.paper_type
+    if is_macro(state):
+        if args.path_c:
+            parser.error("--path-c (data-first) is not available for --paper-type macro")
+        if args.mode == "replicate":
+            print("  [macro] --mode replicate is empirical-only; using model-based ideation.")
+        args.mode = "new"
+    for key in ("lean", "lean_lib", "lean_source", "lean_folder", "lean_export",
+                "lit_scope", "journals"):
+        val = getattr(args, key)
+        if val:
+            state.setdefault("config", {})[key] = val
     state.setdefault("config", {})["stage2_mode"] = args.mode
     state.setdefault("config", {})["paperdl"] = args.paperdl
     state.setdefault("config", {})["notebooklm"] = args.notebooklm
@@ -232,6 +290,7 @@ def main():
     print(f"Project: {project_name}")
     print(f"Directory: {project_dir}")
     print(f"Stages: {args.from_stage} -> {args.to_stage}")
+    print(f"Paper type: {get_paper_type(state)}")
     if args.path_c:
         print(f"Path: C (data-first, topic from data)")
     elif args.data:
@@ -253,8 +312,12 @@ def main():
     from pipeline.stages import stage4_5_data_audit
     from pipeline.stages import stage4_7_code_review
     from pipeline.stages import stage5_writing
+    from pipeline.stages import stage5_5_lean
     from pipeline.stages import stage6_review
     from pipeline.stages import stage7_submission
+
+    def _stage_header_s(stage_num):
+        _stage_header(stage_num, state)
 
     def _run_stage_4(project_dir, state):
         """Stage 4 = 4a (strategy) + 4b/c (code generation + execution)."""
@@ -268,20 +331,21 @@ def main():
 
     # ── Stage dispatch table ─────────────────────────────────────────────
     stage_runners = {
-        1:   lambda: (_stage_header(1),   stage1_discovery.run(project_dir, _stage1_topic(), state, data_path=args.data, path_c=args.path_c, smoke=args.smoke))[-1],
-        1.5: lambda: (_stage_header(1.5), stage1_5_data_loading.run(project_dir, state))[-1],
-        2:   lambda: (_stage_header(2),   stage2_ideation.run(project_dir, state))[-1],
-        2.5: lambda: (_stage_header(2.5), stage2_5_selection.run(project_dir, state))[-1],
-        3:   lambda: (_stage_header(3),   stage3_validation.run(project_dir, state))[-1],
-        3.3: lambda: (_stage_header(3.3), stage3_3_quick_test.run(project_dir, state))[-1],
-        3.5: lambda: (_stage_header(3.5), stage3_5_review.run(project_dir, state))[-1],
-        3.7: lambda: (_stage_header(3.7), stage3_7_referee_preview.run(project_dir, state))[-1],
-        4:   lambda: (_stage_header(4),   _run_stage_4(project_dir, state))[-1],
-        4.5: lambda: (_stage_header(4.5), stage4_5_data_audit.run(project_dir, state))[-1],
-        4.7: lambda: (_stage_header(4.7), stage4_7_code_review.run(project_dir, state))[-1],
-        5:   lambda: (_stage_header(5),   stage5_writing.run(project_dir, state))[-1],
-        6:   lambda: (_stage_header(6),   stage6_review.run(project_dir, state))[-1],
-        7:   lambda: (_stage_header(7),   stage7_submission.run(project_dir, state))[-1],
+        1:   lambda: (_stage_header_s(1),   stage1_discovery.run(project_dir, _stage1_topic(), state, data_path=args.data, path_c=args.path_c, smoke=args.smoke))[-1],
+        1.5: lambda: (_stage_header_s(1.5), stage1_5_data_loading.run(project_dir, state))[-1],
+        2:   lambda: (_stage_header_s(2),   stage2_ideation.run(project_dir, state))[-1],
+        2.5: lambda: (_stage_header_s(2.5), stage2_5_selection.run(project_dir, state))[-1],
+        3:   lambda: (_stage_header_s(3),   stage3_validation.run(project_dir, state))[-1],
+        3.3: lambda: (_stage_header_s(3.3), stage3_3_quick_test.run(project_dir, state))[-1],
+        3.5: lambda: (_stage_header_s(3.5), stage3_5_review.run(project_dir, state))[-1],
+        3.7: lambda: (_stage_header_s(3.7), stage3_7_referee_preview.run(project_dir, state))[-1],
+        4:   lambda: (_stage_header_s(4),   _run_stage_4(project_dir, state))[-1],
+        4.5: lambda: (_stage_header_s(4.5), stage4_5_data_audit.run(project_dir, state))[-1],
+        4.7: lambda: (_stage_header_s(4.7), stage4_7_code_review.run(project_dir, state))[-1],
+        5:   lambda: (_stage_header_s(5),   stage5_writing.run(project_dir, state))[-1],
+        5.5: lambda: (_stage_header_s(5.5), stage5_5_lean.run(project_dir, state))[-1],
+        6:   lambda: (_stage_header_s(6),   stage6_review.run(project_dir, state))[-1],
+        7:   lambda: (_stage_header_s(7),   stage7_submission.run(project_dir, state))[-1],
     }
 
     # ── Run stages in order ──────────────────────────────────────────────
@@ -318,7 +382,10 @@ def main():
             if stage_num == 3:
                 s3_result = state["stages"].get("stage3", {}).get("result", {})
                 if s3_result.get("status") == "REJECTED_WEAK_ID":
-                    print(f"\n  [REJECT] Identification too weak (Level C/Tier 4, score < 5).")
+                    if is_macro(state):
+                        print(f"\n  [REJECT] Model idea too weak (validation score < 4).")
+                    else:
+                        print(f"\n  [REJECT] Identification too weak (Level C/Tier 4, score < 5).")
                     print(f"  Returning to Stage 2.5 to select a different idea.")
                     # Reset stages 3 and 3.3 so they re-run
                     state["stages"]["stage3"] = {}
@@ -371,8 +438,8 @@ def main():
                 decision = state["stages"].get("stage6", {}).get("decision", "")
                 while decision == "MAJOR_REVISIONS" and rr_round < MAX_RR_ROUNDS:
                     print(f"\n  [R&R] Round {rr_round + 1}/{MAX_RR_ROUNDS}")
-                    state = (_stage_header(5), stage5_writing.run(project_dir, state))[-1]
-                    state = (_stage_header(6), stage6_review.run(project_dir, state))[-1]
+                    state = (_stage_header_s(5), stage5_writing.run(project_dir, state))[-1]
+                    state = (_stage_header_s(6), stage6_review.run(project_dir, state))[-1]
                     rr_round = state["stages"].get("stage6", {}).get("rr_round", rr_round + 1)
                     decision = state["stages"].get("stage6", {}).get("decision", "")
 
@@ -386,7 +453,7 @@ def main():
                     stage_idx = STAGE_ORDER.index(restart_from)
                     continue
         else:
-            print(f"\n  [skip] Stage {stage_num} ({STAGE_NAMES[stage_num]}) - not yet implemented")
+            print(f"\n  [skip] Stage {stage_num} ({stage_name(stage_num, state)}) - not yet implemented")
 
         stage_idx += 1
 
