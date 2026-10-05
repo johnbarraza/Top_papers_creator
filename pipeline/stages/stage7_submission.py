@@ -113,10 +113,15 @@ def run(project_dir: Path, state: dict) -> dict:
     # ══════════════════════════════════════════════════════════════════════
     print("\n  [7b] Running 3 validators in parallel...")
 
+    from ..paper_types import is_macro
+    code_validator = validate_code
+    if is_macro(state):
+        from ..validators.macro_validator import validate as code_validator
+
     # Run all three validators concurrently (pure Python, no Claude calls)
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_code = pool.submit(
-            validate_code, scripts_dir, project_dir,
+            code_validator, scripts_dir, project_dir,
             {name: res for name, res in replication_results.items()},
         )
         f_paper = pool.submit(
@@ -192,10 +197,13 @@ def run(project_dir: Path, state: dict) -> dict:
         paper_score = min(100, paper_score + 5)
     # Always use recalculated — frozen may be stale
 
-    # Identification score
+    # Identification score (macro track: model validity from equilibrium tests)
     from .stage4_strategy import _score_identification
     ident_score = stage4a.get("critic_score", 0)
-    if ident_score == 0:
+    if is_macro(state):
+        from ..validators.macro_validator import model_validity_score
+        ident_score = model_validity_score(project_dir)
+    elif ident_score == 0:
         ident_score = _score_identification(state)
 
     # Adjust identification based on peer review

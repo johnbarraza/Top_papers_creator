@@ -27,3 +27,6 @@ data/*.json
 # OS junk
 Thumbs.db
 .DS_Store
+
+# OpenAlex journal-name resolution cache (macro literature search)
+pipeline/macro/.journal_cache.json

@@ -1226,6 +1226,10 @@ def _assess_feasibility(downloaded: list, not_downloaded: list) -> dict:
 
 def run(project_dir: Path, state: dict) -> dict:
     """Execute Stage 1.5: Download and profile datasets (Path A only)."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.discovery import run_stage1_5
+        return run_stage1_5(project_dir, state)
     stage1 = state["stages"].get("stage1", {})
     path = stage1.get("path", "A")
 

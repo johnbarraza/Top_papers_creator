@@ -384,7 +384,11 @@ def _quick_trend_test(df, outcome_col, treat_col, entity_col, time_col):
 
 
 def run(project_dir: Path, state: dict) -> dict:
-    """Execute Stage 3.3: Quick empirical validation."""
+    """Execute Stage 3.3: Quick empirical validation (model smoke test in macro)."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.model_review import run_stage3_3
+        return run_stage3_3(project_dir, state)
     print("\n  [3.3] Running quick empirical test on actual data...")
 
     stage1 = state["stages"].get("stage1", {})

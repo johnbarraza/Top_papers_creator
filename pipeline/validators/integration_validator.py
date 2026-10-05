@@ -13,7 +13,10 @@ from . import CheckLevel, ValidationResult
 
 def validate(project_dir: Path) -> ValidationResult:
     vr = ValidationResult()
-    _check_strategy_to_code(vr, project_dir)
+    if (project_dir / "data" / "model" / "equilibrium_tests.json").exists():
+        _check_model_to_code(vr, project_dir)       # macro track
+    else:
+        _check_strategy_to_code(vr, project_dir)
     _check_code_to_results(vr, project_dir)
     _check_results_to_paper(vr, project_dir)
     _check_paper_integrity(vr, project_dir)
@@ -102,6 +105,34 @@ def _check_strategy_to_code(vr: ValidationResult, project_dir: Path):
             f"Strategy clusters at '{cluster_level}' — "
             f"{'found in code' if code_has_cluster else 'NOT found in code'}"
         )
+
+
+def _check_model_to_code(vr: ValidationResult, project_dir: Path):
+    """Macro track: the model memo and the solved model describe the same thing."""
+    import json
+
+    memo_path = project_dir / "strategy" / "strategy_memo.md"
+    if not memo_path.exists():
+        vr.add("strategy_exists", CheckLevel.HARD, False, "strategy_memo.md (model memo) not found")
+        return
+    memo = memo_path.read_text(encoding="utf-8").lower()
+    calib_path = project_dir / "data" / "model" / "calibration_final.json"
+    if not calib_path.exists():
+        vr.add("model_calibration_exists", CheckLevel.HARD, False,
+               "data/model/calibration_final.json not found")
+        return
+    spec = json.loads(calib_path.read_text(encoding="utf-8"))
+    mc = spec.get("model_class", "")
+    vr.add("model_class_in_memo", CheckLevel.SOFT, mc.replace("_", " ") in memo or mc in memo,
+           f"model class '{mc}' {'named' if mc in memo else 'NOT named'} in the model memo")
+    exp = (spec.get("experiment") or {}).get("type", "")
+    words = {"monetary_shock": "monetary", "comparative_statics": "counterfactual"}
+    w = words.get(exp, exp)
+    vr.add("experiment_in_memo", CheckLevel.SOFT, bool(w) and w in memo,
+           f"experiment '{exp}' {'described' if w in memo else 'NOT described'} in the memo")
+    vr.add("walras_in_memo", CheckLevel.SOFT, "walras" in memo,
+           "memo states which market is redundant by Walras' law" if "walras" in memo
+           else "memo does not mention Walras' law")
 
 
 # ── Code → Results consistency ───────────────────────────────────────────────

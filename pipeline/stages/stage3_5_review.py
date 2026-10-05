@@ -1084,6 +1084,10 @@ def _verify_merge_compatibility(
 
 def run(project_dir: Path, state: dict) -> dict:
     """Execute Stage 3.5: data source selection + human strategy review."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.model_review import run_stage3_5
+        return run_stage3_5(project_dir, state)
     stage1 = state["stages"].get("stage1", {})
     stage3 = state["stages"].get("stage3", {})
     result = stage3.get("result", {})

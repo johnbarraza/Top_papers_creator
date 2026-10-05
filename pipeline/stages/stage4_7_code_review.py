@@ -14,6 +14,7 @@ from pathlib import Path
 from ..config import get_profile, PAPERS_HQ
 from ..claude_runner import run_claude, run_claude_parallel
 from ..json_utils import extract_json, smart_truncate
+from ..paper_types import is_macro
 from ..state import save_state
 
 MAX_CODE_REVIEW_ROUNDS = 3  # max correction iterations
@@ -98,7 +99,8 @@ def _build_code_text(code_files: dict[str, str]) -> str:
 
 
 def _run_code_review(project_dir: Path, code_files: dict[str, str],
-                     paper_summary: str, round_num: int) -> tuple[str, dict]:
+                     paper_summary: str, round_num: int,
+                     macro: bool = False) -> tuple[str, dict]:
     """Run the 2-agent code review (reproducibility + paper-code mapping).
 
     Returns (full_report_text, parsed_result_dict).
@@ -218,6 +220,10 @@ Also output a JSON block at the end:
 }}
 ```
 """
+
+    if macro:
+        from .macro_stages.prompts import code_mapping_prompt
+        agent_b_prompt = code_mapping_prompt(paper_summary, code_text)
 
     # ── Run both agents in parallel ───────────────────────────────────────
     print(f"  [4.7] Running code review agents (round {round_num}/{MAX_CODE_REVIEW_ROUNDS})...")
@@ -730,7 +736,7 @@ def run(project_dir: Path, state: dict) -> dict:
 
         # Run review
         report_text, result = _run_code_review(
-            project_dir, code_files, paper_summary, round_num
+            project_dir, code_files, paper_summary, round_num, macro=is_macro(state)
         )
         final_result = result
 

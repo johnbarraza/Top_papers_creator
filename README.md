@@ -179,7 +179,7 @@ If Claude Code prompts for permissions on every tool call (common with third-par
 
 ```python
 # pipeline/claude_runner.py  — _build_cmd()
-cmd = ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text"]
+cmd = [claude_executable(), "-p", "--dangerously-skip-permissions", "--output-format", "text"]
 ```
 
 > **Security note:** `--dangerously-skip-permissions` disables Claude Code's built-in permission prompts for file and shell access. Only add it if you understand what the pipeline executes. Never use it on a machine with unreviewed code or sensitive credentials in scope.
@@ -236,6 +236,45 @@ python run_pipeline.py --topic "education Peru" --mode replicate --paper ./mypap
 ```
 
 Stage 2 displays a ranked table of candidates with DOI, identification method, dataset name, data availability badge, and paperdl/arXiv access badge. You pick one (or it is skipped if `--paper` is provided), then the pipeline continues normally through Stages 3–7, generating HTE-specific code templates (`hte_00_clean.py` → `hte_03_output.py`).
+
+### Macro track — model-based papers (HANK, TANK, Aiyagari, Huggett)
+
+For quantitative-macro papers in the style of Kaplan–Moll–Violante or Achdou et al. — general equilibrium, no causal identification — use `--paper-type macro` (or answer `M` in the interactive menu):
+
+```text
+python run_pipeline.py --topic "Monetary policy transmission with liquidity constraints" --paper-type macro
+python run_pipeline.py --topic "Credit crunch and household debt" --paper-type macro --data ./scf_moments.csv
+```
+
+The same stages run with model-based content: seed papers + a calibration data plan (FRED/BCRP series downloaded automatically), model-based ideation scored on mechanism/discipline/tractability, a **model smoke test** (3.3), a human **model specification review** (3.5), and in Stage 4 a continuous-time HJB–KFE solver (`pipeline/macro/ha_core.py`) plus an equilibrium test library (`pipeline/macro/equilibrium_checks.py`). Every model must report its class contract of tests — market clearing, **Walras' law on the omitted market**, generator/density checks, state constraints, `r < ρ`, transition budget identities, determinacy, TANK→RANK nesting — and **any HARD failure stops the pipeline before a paper is written**. See [orchestration.md → Macro track](orchestration.md#macro-track-quantitative-macro--general-equilibrium) for the full flow and test contract.
+
+**Journal-targeted literature (macro).** Seed papers (Stage 1) and the Stage 3 literature review search OpenAlex restricted to macro venues: `top5` (AER, Econometrica, JPE, QJE, REStud), `macro_field` (JME, RED, AEJ:Macro, JEDC, JMCB, QE, JET, JEEA, NBER Macro Annual, BPEA, IMF Economic Review, EER, JIE, EJ) and `working_papers` (NBER, Fed FEDS, IMF, FRB San Francisco, FRB Dallas); `preprints` (arXiv) is opt-in. Results are ranked by venue tier, citations and recency, then merged with the broad Semantic Scholar/OpenAlex search.
+
+```text
+python run_pipeline.py --topic "Fiscal multipliers in HANK" --paper-type macro --lit-scope top5,macro_field
+python run_pipeline.py --topic "Dollarization and monetary transmission" --paper-type macro \
+    --journals "Revista Estudios Economicos;Economia"     # extra journals by exact title
+```
+
+### Optional: Lean formalization (Stage 5.5)
+
+Off by default. With a local clone of [AppliedModelingLib](https://gargnikhil.com/AppliedModelingLib/), the pipeline can hand the paper's propositions to the `paper-formalization` workflow, run `scripts/paper_contribution.py check <Folder> --fast` **before** copying, record the result in `quality_reports/lean_check.md`, and copy `papers/<Folder>/` **exactly as generated** to `<project>/lean/` (and optionally `--lean-export <repo>` → `<repo>/lean/`). Partial or failed runs are kept, never cleaned, and never stop the pipeline.
+
+```text
+# You run your own coding agent from the library root; the pipeline waits, then checks and copies
+python run_pipeline.py --from-stage 5.5 --to-stage 5.5 --project my_macro --lean manual --lean-lib ../AppliedModelingLib
+
+# Formalize an arXiv paper instead of this project's paper, and export to a weekly repo
+python run_pipeline.py --from-stage 5.5 --to-stage 5.5 --project my_macro --lean manual \
+    --lean-lib ../AppliedModelingLib --lean-source https://arxiv.org/abs/2312.05481v11 \
+    --lean-folder IT25KnowledgeEconomy --lean-export ../weekly-repo
+```
+
+`--lean auto` runs the agent unattended: set `PIPELINE_LEAN_AGENT_CMD` to any agent CLI command (`{prompt_file}` and `{folder}` are substituted), otherwise `claude -p` is used with the `lean_formalize` profile (Opus, effort `xhigh`; the agent needs edit/shell permissions in the library). Stage the export with plain `git add lean/` — respect the generated `.gitignore` and never `git add -f`.
+
+### Models
+
+Stage profiles name a tier that resolves to a pinned model in `pipeline/config.py` (`MODEL_IDS`): `opus` → `claude-opus-5-5` (validation verdict, code review, contribution referee, macro ideation/referees, Lean), `sonnet` → `claude-sonnet-5-5` (default), `haiku` → `claude-haiku-4-5` (cheap enrichment). Override a tier with `PIPELINE_MODEL_OPUS=claude-fable-5-1` (etc.). With `ANTHROPIC_BASE_URL` set (e.g. DeepSeek) the bare aliases are passed so `ANTHROPIC_DEFAULT_*_MODEL` keeps working. Effort accepts `low|medium|high|xhigh|max`.
 
 ### Resume or inspect an existing project
 

@@ -13,6 +13,9 @@ from ..state import save_state
 
 def run(project_dir: Path, state: dict) -> dict:
     """Execute Stage 4a: check strategy exists, mark completed."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        return state  # model memo + validity score are produced by the macro Stage 4
     if state["stages"].get("stage4a", {}).get("status") == "completed":
         print("  [4a] Already completed — skipping.")
         return state

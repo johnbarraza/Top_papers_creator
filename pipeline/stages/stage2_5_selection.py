@@ -15,6 +15,10 @@ from ..human_checkpoint import idea_selection
 
 def run(project_dir: Path, state: dict) -> dict:
     """Execute Stage 2.5: human idea selection checkpoint."""
+    from ..paper_types import is_macro
+    if is_macro(state):
+        from .macro_stages.ideation import run_stage2_5
+        return run_stage2_5(project_dir, state)
     stage2 = state["stages"].get("stage2", {})
     top_ideas = stage2.get("top_ideas", [])
 

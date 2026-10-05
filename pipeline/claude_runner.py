@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
-from .config import CLAUDE_TIMEOUT, MAX_PARALLEL_AGENTS
+from .config import CLAUDE_TIMEOUT, MAX_PARALLEL_AGENTS, resolve_model
 
 # ── Force unbuffered stdout so log files show progress in real time ───────────
 import functools
@@ -25,20 +25,17 @@ print = functools.partial(print, flush=True)  # type: ignore[assignment]
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 10  # seconds; actual wait = base * attempt (10, 20, 30)
 
-# ── Model aliases for --model flag ───────────────────────────────────────────
+# Effort levels supported by the claude CLI
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
-MODEL_MAP = {
-    "sonnet": "sonnet",
-    "haiku":  "haiku",
-    "opus":   "opus",
-}
 
-# Effort levels supported by claude CLI: low, medium, high, max
-EFFORT_MAP = {
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-}
+def claude_executable() -> str:
+    """Path to the claude CLI. On Windows npm installs a `claude.cmd` shim
+    that CreateProcess cannot find from the bare name "claude"."""
+    import shutil
+    if sys.platform == "win32":
+        return shutil.which("claude.cmd") or shutil.which("claude.exe") or "claude"
+    return shutil.which("claude") or "claude"
 
 
 def _build_cmd(
@@ -49,17 +46,16 @@ def _build_cmd(
     effort: Optional[str] = None,
 ) -> list[str]:
     """Build the `claude -p` command with appropriate flags."""
-    cmd = ["claude", "-p", "--output-format", "text"]
+    cmd = [claude_executable(), "-p", "--output-format", "text"]
 
     if model:
-        cmd.extend(["--model", MODEL_MAP.get(model, model)])
+        cmd.extend(["--model", resolve_model(model)])
 
     if system_prompt:
         cmd.extend(["--system-prompt", system_prompt])
 
     if effort:
-        cli_effort = EFFORT_MAP.get(effort, "medium")
-        cmd.extend(["--effort", cli_effort])
+        cmd.extend(["--effort", effort if effort in EFFORT_LEVELS else "medium"])
 
     # Tool restrictions:
     # - allowed_tools=None  → use default CLI tools
